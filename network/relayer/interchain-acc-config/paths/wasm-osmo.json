@@ -1,0 +1,15 @@
+{
+    "src":
+      {
+        "chain-id":"wasmd-1"
+      },
+    "dst":
+      {
+        "chain-id":"osmo-testing"
+      },
+      "src-channel-filter": {
+        "rule": "",
+        "channel-list": []
+      }
+  }
+  
