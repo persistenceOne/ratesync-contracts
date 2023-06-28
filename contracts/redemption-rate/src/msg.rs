@@ -1,26 +1,69 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
+use cosmwasm_std::{Addr, Decimal};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
-#[cw_serde]
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, JsonSchema)]
 pub struct InstantiateMsg {
-    pub count: i32,
+    /// Contract configuration
+    pub config: ConfigParams,
 }
 
-#[cw_serde]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
-    Increment {},
-    Reset { count: i32 },
+    /// Update contract config (only owner can call)
+    UpdateConfig { config: ConfigParams },
+
+    /// Accept ownership of the contract (only pending owner can call)
+    /// This is used to transfer ownership of the contract to a new address
+    AcceptOwnership {},
+
+    /// Cancel ownership transfer (only pending owner can call)
+    /// This is used to cancel a pending ownership transfer
+    CancelOwnership {},
+
+    /// Set redemption rate for denom pair (only owner can call)
+    SetRedemptionRate {
+        /// Denom pairs
+        price: Price,
+        /// Exchange rate for denom pair
+        exchange_rate: Decimal,
+    },
 }
 
 #[cw_serde]
 #[derive(QueryResponses)]
 pub enum QueryMsg {
-    // GetCount returns the current count as a json-encoded number
-    #[returns(GetCountResponse)]
-    GetCount {},
+    /// Get config
+    #[returns(ConfigResponse)]
+    Config {},
+
+    // Get redemption rate
+    #[returns(RedemptionRateResponse)]
+    RedemptionRateRequest { price: Price },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, JsonSchema)]
+pub struct ConfigParams {
+    /// Owner address for config update
+    pub owner: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, JsonSchema)]
+pub struct ConfigResponse {
+    pub owner: Addr,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, JsonSchema)]
+pub struct Price {
+    pub denom: String,
+    pub base_denom: String,
 }
 
 // We define a custom struct for each query response
-#[cw_serde]
-pub struct GetCountResponse {
-    pub count: i32,
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, JsonSchema)]
+pub struct RedemptionRateResponse {
+    pub exchange_rate: Decimal,
+    pub last_updated: u64,
 }
