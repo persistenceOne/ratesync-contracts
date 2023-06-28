@@ -41,7 +41,9 @@ pub enum QueryMsg {
 
     // Get redemption rate
     #[returns(RedemptionRateResponse)]
-    RedemptionRateRequest { price: Price },
+    RedemptionRateRequest { 
+        price: Price,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, JsonSchema)]
