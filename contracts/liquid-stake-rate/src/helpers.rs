@@ -6,7 +6,10 @@ use cosmwasm_std::{
     WasmQuery,
 };
 
-use crate::msg::{ExecuteMsg, QueryMsg, RedemptionRateResponse};
+use crate::{
+    msg::{ExecuteMsg, LiquidStakeRateResponse, QueryMsg},
+    ContractError,
+};
 
 /// CwTemplateContract is a wrapper around Addr that provides a lot of helpers
 /// for working with this.
@@ -29,7 +32,7 @@ impl CwTemplateContract {
     }
 
     /// Get Count
-    pub fn count<Q, T, CQ>(&self, querier: &Q) -> StdResult<RedemptionRateResponse>
+    pub fn count<Q, T, CQ>(&self, querier: &Q) -> StdResult<LiquidStakeRateResponse>
     where
         Q: Querier,
         T: Into<String>,
@@ -41,7 +44,7 @@ impl CwTemplateContract {
             msg: to_binary(&msg)?,
         }
         .into();
-        let res: RedemptionRateResponse = QuerierWrapper::<CQ>::new(querier).query(&query)?;
+        let res: LiquidStakeRateResponse = QuerierWrapper::<CQ>::new(querier).query(&query)?;
         Ok(res)
     }
 }
@@ -56,4 +59,32 @@ pub fn option_string_to_addr(
         Some(input_addr) => api.addr_validate(&input_addr),
         None => Ok(default),
     }
+}
+
+pub fn validate_native_denom(denom: &str) -> Result<(), ContractError> {
+    if denom.len() < 3 || denom.len() > 128 {
+        return Err(ContractError::InvalidDenom {
+            reason: "Invalid denom length".to_string(),
+        });
+    }
+
+    let mut chars = denom.chars();
+    let first = chars.next().unwrap();
+    if !first.is_ascii_alphabetic() {
+        return Err(ContractError::InvalidDenom {
+            reason: "First character is not ASCII alphabetic".to_string(),
+        });
+    }
+
+    let set = ['/', ':', '.', '_', '-'];
+    for c in chars {
+        if !(c.is_ascii_alphanumeric() || set.contains(&c)) {
+            return Err(ContractError::InvalidDenom {
+                reason: "Not all characters are ASCII alphanumeric or one of:  /  :  .  _  -"
+                    .to_string(),
+            });
+        }
+    }
+
+    Ok(())
 }
