@@ -13,9 +13,10 @@ build: fmt
 	@echo "Building..."
 	@cargo build
 
-.PHONY: build-optimize
-build-optimize: test
-	@docker run --rm -v "$(pwd)":/code \
-		--mount type=volume,source="$(basename "$(pwd)")_cache",target=/code/target \
+.PHONY: build-optimized
+build-optimized: test
+	@echo "Building optimized..."
+	docker run --rm -v "$(CURDIR)":/code \
+		--mount type=volume,source="$(notdir $(CURDIR))_cache",target=/target \
 		--mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
 		cosmwasm/rust-optimizer:0.14.0

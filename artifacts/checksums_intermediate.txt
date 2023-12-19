@@ -1,1 +1,1 @@
-4c0ae5306bdbb79dfbd3844fb9a9bca18d7230d99d8f58fcf2caefc2362384ef  /target/wasm32-unknown-unknown/release/liquid_stake_rate.wasm
+cbe641b72839b5d45c3eeb2959ff0afc8e0efe742333fbec162c1eca2c7cf8cc  /target/wasm32-unknown-unknown/release/liquid_stake_rate.wasm
