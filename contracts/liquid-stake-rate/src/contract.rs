@@ -386,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn test_timestamp_u64(){
+    fn test_timestamp_u64() {
         let time = Timestamp::from_nanos(1);
         let time_u64: u64 = time.nanos();
         assert_eq!(time_u64, 1);
