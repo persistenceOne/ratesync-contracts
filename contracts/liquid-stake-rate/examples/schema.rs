@@ -1,6 +1,9 @@
 use cosmwasm_schema::{export_schema, remove_schemas, schema_for};
 use liquid_stake_rate::{
-    msg::{ConfigResponse, ExecuteMsg, InstantiateMsg, QueryMsg, LiquidStakeRateResponse, LiquidStakeRates},
+    msg::{
+        ConfigResponse, ExecuteMsg, InstantiateMsg, LiquidStakeRateResponse, LiquidStakeRates,
+        QueryMsg,
+    },
     state::{Config, LiquidStakeRate},
 };
 use std::env::current_dir;

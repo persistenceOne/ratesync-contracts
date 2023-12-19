@@ -52,15 +52,19 @@ pub fn execute(
             stk_denom,
             c_value,
             controller_chain_time,
-        } => execute_liquid_stake_rate(
-            deps,
-            env,
-            info,
-            default_bond_denom,
-            stk_denom,
-            c_value,
-            controller_chain_time,
-        ),
+        } => {
+            let controller_chain_time_u64: u64 = controller_chain_time.nanos();
+
+            execute_liquid_stake_rate(
+                deps,
+                env,
+                info,
+                default_bond_denom,
+                stk_denom,
+                c_value,
+                controller_chain_time_u64,
+            )
+        }
     }
 }
 // Set liquid stake rate
@@ -180,7 +184,7 @@ mod tests {
     use cosmwasm_std::testing::{
         mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MockStorage,
     };
-    use cosmwasm_std::{coins, from_binary, Empty, OwnedDeps};
+    use cosmwasm_std::{coins, from_binary, Empty, OwnedDeps, Timestamp};
 
     #[test]
     fn proper_initialization() {
@@ -218,7 +222,7 @@ mod tests {
             default_bond_denom: "somecoin1".to_string(),
             stk_denom: "somecoin2".to_string(),
             c_value: Decimal::percent(1),
-            controller_chain_time: 1,
+            controller_chain_time: mock_env().block.time,
         };
 
         let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
@@ -256,7 +260,7 @@ mod tests {
             default_bond_denom: "somecoin1".to_string(),
             stk_denom: "somecoin2".to_string(),
             c_value: Decimal::percent(1),
-            controller_chain_time: 1,
+            controller_chain_time: mock_env().block.time,
         };
 
         let res = execute(deps.as_mut(), mock_env(), info, msg);
@@ -297,7 +301,7 @@ mod tests {
         default_bond_denom: String,
         stk_denom: String,
         c_value: &str,
-        controller_chain_time: u64,
+        controller_chain_time: Timestamp,
     ) -> ExecuteMsg {
         ExecuteMsg::LiquidStakeRate {
             default_bond_denom,
@@ -315,10 +319,30 @@ mod tests {
         let default_bond_denom = "somecoin1".to_string();
         let stk_denom = "somecoin2".to_string();
 
-        let msg1 = get_post_metric_msg(default_bond_denom.clone(), stk_denom.clone(), "1", 1);
-        let msg2 = get_post_metric_msg(default_bond_denom.clone(), stk_denom.clone(), "2", 2);
-        let msg3 = get_post_metric_msg(default_bond_denom.clone(), stk_denom.clone(), "3", 2);
-        let msg4 = get_post_metric_msg(default_bond_denom.clone(), stk_denom.clone(), "4", 3);
+        let msg1 = get_post_metric_msg(
+            default_bond_denom.clone(),
+            stk_denom.clone(),
+            "1",
+            Timestamp::from_nanos(1),
+        );
+        let msg2 = get_post_metric_msg(
+            default_bond_denom.clone(),
+            stk_denom.clone(),
+            "2",
+            Timestamp::from_nanos(2),
+        );
+        let msg3 = get_post_metric_msg(
+            default_bond_denom.clone(),
+            stk_denom.clone(),
+            "3",
+            Timestamp::from_nanos(2),
+        );
+        let msg4 = get_post_metric_msg(
+            default_bond_denom.clone(),
+            stk_denom.clone(),
+            "4",
+            Timestamp::from_nanos(3),
+        );
 
         let rr1 = get_test_liquid_stake_rate("1", 1);
         let rr2 = get_test_liquid_stake_rate("3", 2);
@@ -359,5 +383,12 @@ mod tests {
                 c_value_rates: vec![rr3, rr2]
             }
         );
+    }
+
+    #[test]
+    fn test_timestamp_u64(){
+        let time = Timestamp::from_nanos(1);
+        let time_u64: u64 = time.nanos();
+        assert_eq!(time_u64, 1);
     }
 }

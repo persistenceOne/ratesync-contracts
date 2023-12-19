@@ -1,5 +1,5 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Addr, Decimal};
+use cosmwasm_std::{Addr, Decimal, Timestamp};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +23,7 @@ pub enum ExecuteMsg {
         /// Exchange rate for denom pair
         c_value: Decimal,
         /// time
-        controller_chain_time: u64,
+        controller_chain_time: Timestamp,
     },
 }
 
