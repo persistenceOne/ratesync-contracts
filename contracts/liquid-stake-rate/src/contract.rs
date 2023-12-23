@@ -180,7 +180,9 @@ mod tests {
     use cosmwasm_std::testing::{
         mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MockStorage,
     };
-    use cosmwasm_std::{coins, from_binary, Empty, OwnedDeps, Timestamp};
+    use cosmwasm_std::{attr, coins, from_binary, Empty, OwnedDeps};
+
+    const OWNER_ADDRESS: &str = "creator";
 
     #[test]
     fn proper_initialization() {
@@ -189,11 +191,17 @@ mod tests {
         let msg = InstantiateMsg {
             admin: Some("owner".to_string()),
         };
-        let info = mock_info("creator", &coins(1000, "earth"));
+        let info = mock_info(OWNER_ADDRESS, &coins(1000, "earth"));
 
         // we can just call .unwrap() to assert this was a success
         let res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
-        assert_eq!(0, res.messages.len());
+        assert_eq!(
+            res.attributes,
+            vec![
+                attr("method", "instantiate"),
+                attr("owner", OWNER_ADDRESS.to_string()),
+            ]
+        );
 
         // it worked, let's query the state
         let res = query(deps.as_ref(), mock_env(), QueryMsg::Config {}).unwrap();
@@ -203,17 +211,8 @@ mod tests {
 
     #[test]
     fn set_liq_stake_rate() {
-        let mut deps = mock_dependencies();
+        let (mut deps, env, info) = default_instantiate();
 
-        let msg = InstantiateMsg {
-            admin: Some("owner".to_string()),
-        };
-        let info = mock_info("creator", &coins(1000, "earth"));
-
-        // we can just call .unwrap() to assert this was a success
-        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
-
-        let info = mock_info("owner", &coins(1000, "earth"));
         let msg = ExecuteMsg::LiquidStakeRate {
             default_bond_denom: "somecoin1".to_string(),
             stk_denom: "somecoin2".to_string(),
@@ -221,8 +220,7 @@ mod tests {
             controller_chain_time: 1,
         };
 
-        let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
-        assert_eq!(0, res.messages.len());
+        let _res = execute(deps.as_mut(), env, info, msg).unwrap();
 
         // it worked, let's query the state
         let res = query(
@@ -240,15 +238,7 @@ mod tests {
 
     #[test]
     fn set_liquid_stake_rate_should_fail() {
-        let mut deps = mock_dependencies();
-
-        let msg = InstantiateMsg {
-            admin: Some("owner".to_string()),
-        };
-        let info = mock_info("creator", &coins(1000, "earth"));
-
-        // we can just call .unwrap() to assert this was a success
-        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+        let (mut deps, env, _info) = default_instantiate();
 
         // unauthorized attempt
         let info = mock_info("anyone", &coins(1000, "earth"));
@@ -259,51 +249,10 @@ mod tests {
             controller_chain_time: 1,
         };
 
-        let res = execute(deps.as_mut(), mock_env(), info, msg);
+        let res = execute(deps.as_mut(), env, info, msg);
         match res {
             Err(ContractError::Unauthorized {}) => {}
             _ => panic!("Must return unauthorized error"),
-        }
-    }
-
-    fn default_instantiate() -> (
-        OwnedDeps<MockStorage, MockApi, MockQuerier, Empty>,
-        Env,
-        MessageInfo,
-    ) {
-        let mut deps = mock_dependencies();
-
-        let msg = InstantiateMsg {
-            admin: Some("owner".to_string()),
-        };
-        let info = mock_info("creator", &coins(1000, "earth"));
-
-        // we can just call .unwrap() to assert this was a success
-        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
-
-        let info = mock_info("owner", &coins(1000, "earth"));
-
-        (deps, mock_env(), info)
-    }
-
-    fn get_test_liquid_stake_rate(value: &str, time: u64) -> LiquidStakeRate {
-        LiquidStakeRate {
-            c_value: Decimal::from_str(value).unwrap(),
-            last_updated: time,
-        }
-    }
-
-    fn get_post_metric_msg(
-        default_bond_denom: String,
-        stk_denom: String,
-        c_value: &str,
-        controller_chain_time: u64,
-    ) -> ExecuteMsg {
-        ExecuteMsg::LiquidStakeRate {
-            default_bond_denom,
-            stk_denom,
-            c_value: Decimal::from_str(c_value).unwrap(),
-            controller_chain_time,
         }
     }
 
@@ -315,10 +264,10 @@ mod tests {
         let default_bond_denom = "somecoin1".to_string();
         let stk_denom = "somecoin2".to_string();
 
-        let msg1 = get_post_metric_msg(default_bond_denom.clone(), stk_denom.clone(), "1", 1);
-        let msg2 = get_post_metric_msg(default_bond_denom.clone(), stk_denom.clone(), "2", 2);
-        let msg3 = get_post_metric_msg(default_bond_denom.clone(), stk_denom.clone(), "3", 2);
-        let msg4 = get_post_metric_msg(default_bond_denom.clone(), stk_denom.clone(), "4", 3);
+        let msg1 = get_execute_msg(default_bond_denom.clone(), stk_denom.clone(), "1", 1);
+        let msg2 = get_execute_msg(default_bond_denom.clone(), stk_denom.clone(), "2", 2);
+        let msg3 = get_execute_msg(default_bond_denom.clone(), stk_denom.clone(), "3", 2);
+        let msg4 = get_execute_msg(default_bond_denom.clone(), stk_denom.clone(), "4", 3);
 
         let rr1 = get_test_liquid_stake_rate("1", 1);
         let rr2 = get_test_liquid_stake_rate("3", 2);
@@ -362,9 +311,117 @@ mod tests {
     }
 
     #[test]
-    fn test_timestamp_u64() {
-        let time = Timestamp::from_nanos(1);
-        let time_u64: u64 = time.nanos();
-        assert_eq!(time_u64, 1);
+    fn test_all_latest_msgs() {
+        // Instantiate contract
+        let (mut deps, env, info) = default_instantiate();
+
+        // Build three msgs - each with a new and an old record
+        let msg1_old =
+            get_execute_msg("somecoin1".to_string(), "stk/somecoin1".to_string(), "1", 0);
+        let msg2_old =
+            get_execute_msg("somecoin2".to_string(), "stk/somecoin1".to_string(), "2", 0);
+        let msg3_old =
+            get_execute_msg("somecoin3".to_string(), "stk/somecoin1".to_string(), "3", 0);
+
+        let msg1_new =
+            get_execute_msg("somecoin1".to_string(), "stk/somecoin1".to_string(), "1", 1);
+        let msg2_new =
+            get_execute_msg("somecoin2".to_string(), "stk/somecoin1".to_string(), "2", 2);
+        let msg3_new =
+            get_execute_msg("somecoin3".to_string(), "stk/somecoin1".to_string(), "3", 3);
+
+        // Execute each message
+        execute(deps.as_mut(), env.clone(), info.clone(), msg1_old).unwrap();
+        execute(deps.as_mut(), env.clone(), info.clone(), msg2_old).unwrap();
+        execute(deps.as_mut(), env.clone(), info.clone(), msg3_old).unwrap();
+
+        execute(deps.as_mut(), env.clone(), info.clone(), msg1_new).unwrap();
+        execute(deps.as_mut(), env.clone(), info.clone(), msg2_new).unwrap();
+        execute(deps.as_mut(), env.clone(), info, msg3_new).unwrap();
+
+        // Confirm all msgs are preset and are sorted
+        let query_msg1 = QueryMsg::LiquidStakeRate {
+            default_bond_denom: "somecoin1".to_string(),
+            stk_denom: "stk/somecoin1".to_string(),
+        };
+        let query_msg2 = QueryMsg::LiquidStakeRate {
+            default_bond_denom: "somecoin2".to_string(),
+            stk_denom: "stk/somecoin1".to_string(),
+        };
+        let query_msg3 = QueryMsg::LiquidStakeRate {
+            default_bond_denom: "somecoin3".to_string(),
+            stk_denom: "stk/somecoin1".to_string(),
+        };
+
+        let resp1 = query(deps.as_ref(), env.clone(), query_msg1).unwrap();
+        let resp2 = query(deps.as_ref(), env.clone(), query_msg2).unwrap();
+        let resp3 = query(deps.as_ref(), env, query_msg3).unwrap();
+
+        let msg_responses1: LiquidStakeRate = from_binary(&resp1).unwrap();
+        let msg_responses2: LiquidStakeRate = from_binary(&resp2).unwrap();
+        let msg_responses3: LiquidStakeRate = from_binary(&resp3).unwrap();
+
+        assert_eq!(
+            msg_responses1,
+            LiquidStakeRate {
+                c_value: Decimal::from_str("1").unwrap(),
+                last_updated: 1,
+            }
+        );
+        assert_eq!(
+            msg_responses2,
+            LiquidStakeRate {
+                c_value: Decimal::from_str("2").unwrap(),
+                last_updated: 2,
+            }
+        );
+        assert_eq!(
+            msg_responses3,
+            LiquidStakeRate {
+                c_value: Decimal::from_str("3").unwrap(),
+                last_updated: 3,
+            }
+        )
+    }
+
+    // helper function to instantiate contract
+    fn default_instantiate() -> (
+        OwnedDeps<MockStorage, MockApi, MockQuerier, Empty>,
+        Env,
+        MessageInfo,
+    ) {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let info = mock_info(OWNER_ADDRESS, &coins(1000, "earth"));
+
+        let msg = InstantiateMsg {
+            admin: Some(OWNER_ADDRESS.to_string()),
+        };
+        let _res = instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+        (deps, env, info)
+    }
+
+    // helper function to get a test liquid stake rate
+    fn get_test_liquid_stake_rate(value: &str, time: u64) -> LiquidStakeRate {
+        LiquidStakeRate {
+            c_value: Decimal::from_str(value).unwrap(),
+            last_updated: time,
+        }
+    }
+
+    // helper function to get a test execute message
+    fn get_execute_msg(
+        default_bond_denom: String,
+        stk_denom: String,
+        c_value: &str,
+        controller_chain_time: u64,
+    ) -> ExecuteMsg {
+        ExecuteMsg::LiquidStakeRate {
+            default_bond_denom,
+            stk_denom,
+            c_value: Decimal::from_str(c_value).unwrap(),
+            controller_chain_time,
+        }
     }
 }
