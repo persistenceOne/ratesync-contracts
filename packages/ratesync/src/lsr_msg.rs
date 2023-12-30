@@ -3,7 +3,7 @@ use cosmwasm_std::{Addr, Decimal};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::state::LiquidStakeRate;
+use crate::lsr_state::LiquidStakeRate;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, JsonSchema)]
 pub struct InstantiateMsg {

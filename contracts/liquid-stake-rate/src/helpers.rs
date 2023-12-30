@@ -2,14 +2,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use cosmwasm_std::{
-    to_binary, Addr, Api, CosmosMsg, CustomQuery, Querier, QuerierWrapper, StdResult, WasmMsg,
+    to_json_binary, Addr, Api, CosmosMsg, CustomQuery, Querier, QuerierWrapper, StdResult, WasmMsg,
     WasmQuery,
 };
 
-use crate::{
-    msg::{ExecuteMsg, LiquidStakeRateResponse, QueryMsg},
-    ContractError,
-};
+use ratesync::lsr_msg::{ExecuteMsg, LiquidStakeRateResponse, QueryMsg};
+
+use crate::ContractError;
 
 /// CwTemplateContract is a wrapper around Addr that provides a lot of helpers
 /// for working with this.
@@ -22,7 +21,7 @@ impl CwTemplateContract {
     }
 
     pub fn call<T: Into<ExecuteMsg>>(&self, msg: T) -> StdResult<CosmosMsg> {
-        let msg = to_binary(&msg.into())?;
+        let msg = to_json_binary(&msg.into())?;
         Ok(WasmMsg::Execute {
             contract_addr: self.addr().into(),
             msg,
@@ -41,7 +40,7 @@ impl CwTemplateContract {
         let msg = QueryMsg::Config {};
         let query = WasmQuery::Smart {
             contract_addr: self.addr().into(),
-            msg: to_binary(&msg)?,
+            msg: to_json_binary(&msg)?,
         }
         .into();
         let res: LiquidStakeRateResponse = QuerierWrapper::<CQ>::new(querier).query(&query)?;

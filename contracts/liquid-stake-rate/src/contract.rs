@@ -1,17 +1,21 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_binary, Addr, Binary, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdError,
+    to_json_binary, Addr, Binary, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdError,
     StdResult,
 };
 use cw2::set_contract_version;
 
+use ratesync::{
+    lsr_msg::{
+        ConfigResponse, ExecuteMsg, InstantiateMsg, LiquidStakeRateResponse, LiquidStakeRates,
+        QueryMsg,
+    },
+    lsr_state::{Config, History, LiquidStakeRate, CONFIG, LIQUID_STAKE_RATES},
+};
+
 use crate::error::ContractError;
 use crate::helpers::{option_string_to_addr, validate_native_denom};
-use crate::msg::{
-    ConfigResponse, ExecuteMsg, InstantiateMsg, LiquidStakeRateResponse, LiquidStakeRates, QueryMsg,
-};
-use crate::state::{Config, History, LiquidStakeRate, CONFIG, LIQUID_STAKE_RATES};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:liquid-stake-rate";
@@ -105,12 +109,12 @@ pub fn execute_liquid_stake_rate(
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::Config {} => to_binary(&query_config(deps)?),
+        QueryMsg::Config {} => to_json_binary(&query_config(deps)?),
 
         QueryMsg::LiquidStakeRate {
             default_bond_denom,
             stk_denom,
-        } => to_binary(&get_latest_liquid_stake_rate(
+        } => to_json_binary(&get_latest_liquid_stake_rate(
             deps,
             default_bond_denom,
             stk_denom,
@@ -121,7 +125,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             stk_denom,
             limit,
             ..
-        } => to_binary(&get_historical_liquid_stake_rates(
+        } => to_json_binary(&get_historical_liquid_stake_rates(
             deps,
             default_bond_denom,
             stk_denom,
@@ -180,7 +184,7 @@ mod tests {
     use cosmwasm_std::testing::{
         mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MockStorage,
     };
-    use cosmwasm_std::{attr, coins, from_binary, Empty, OwnedDeps};
+    use cosmwasm_std::{attr, coins, from_json, Empty, OwnedDeps};
 
     const OWNER_ADDRESS: &str = "creator";
 
@@ -205,7 +209,7 @@ mod tests {
 
         // it worked, let's query the state
         let res = query(deps.as_ref(), mock_env(), QueryMsg::Config {}).unwrap();
-        let value: ConfigResponse = from_binary(&res).unwrap();
+        let value: ConfigResponse = from_json(res).unwrap();
         assert_eq!("owner", value.owner);
     }
 
@@ -232,7 +236,7 @@ mod tests {
             },
         )
         .unwrap();
-        let value: LiquidStakeRateResponse = from_binary(&res).unwrap();
+        let value: LiquidStakeRateResponse = from_json(res).unwrap();
         assert_eq!(Decimal::percent(1), value.c_value);
     }
 
@@ -286,7 +290,7 @@ mod tests {
             limit: None,
         };
         let resp = query(deps.as_ref(), env.clone(), msg).unwrap();
-        let history_response: LiquidStakeRates = from_binary(&resp).unwrap();
+        let history_response: LiquidStakeRates = from_json(resp).unwrap();
         assert_eq!(
             history_response,
             LiquidStakeRates {
@@ -301,7 +305,7 @@ mod tests {
             limit: Some(2),
         };
         let resp = query(deps.as_ref(), env, msg).unwrap();
-        let history_response: LiquidStakeRates = from_binary(&resp).unwrap();
+        let history_response: LiquidStakeRates = from_json(resp).unwrap();
         assert_eq!(
             history_response,
             LiquidStakeRates {
@@ -357,9 +361,9 @@ mod tests {
         let resp2 = query(deps.as_ref(), env.clone(), query_msg2).unwrap();
         let resp3 = query(deps.as_ref(), env, query_msg3).unwrap();
 
-        let msg_responses1: LiquidStakeRate = from_binary(&resp1).unwrap();
-        let msg_responses2: LiquidStakeRate = from_binary(&resp2).unwrap();
-        let msg_responses3: LiquidStakeRate = from_binary(&resp3).unwrap();
+        let msg_responses1: LiquidStakeRate = from_json(resp1).unwrap();
+        let msg_responses2: LiquidStakeRate = from_json(resp2).unwrap();
+        let msg_responses3: LiquidStakeRate = from_json(resp3).unwrap();
 
         assert_eq!(
             msg_responses1,

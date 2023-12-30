@@ -1,6 +1,6 @@
 use cosmwasm_schema::write_api;
 
-use ratesync::lsr_msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use osmosis_pool_ratesync::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 
 fn main() {
     write_api! {
