@@ -1,7 +1,14 @@
+all: fmt clippy test build schema
+
 .PHONY: fmt
 fmt:
 	@echo "Formatting code..."
 	@cargo fmt --all -- --check
+
+.PHONY: clippy
+clippy:
+	@echo "Running clippy..."
+	@cargo clippy -- -D warnings
 
 .PHONY: test
 test: fmt
