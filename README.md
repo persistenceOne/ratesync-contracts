@@ -1,4 +1,4 @@
-# Persistence-Osmosis ICA
+# ratesync
 
 ## Design
 
@@ -29,7 +29,3 @@ To ensure they are proper, run the following in the repo root:
 ```shell
 cargo test
 ```
-
-## Integration Tests
-
-See [tests/README.md](tests/README.md)

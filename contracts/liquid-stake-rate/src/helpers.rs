@@ -1,52 +1,6 @@
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
-use cosmwasm_std::{
-    to_json_binary, Addr, Api, CosmosMsg, CustomQuery, Querier, QuerierWrapper, StdResult, WasmMsg,
-    WasmQuery,
-};
-
-use ratesync::lsr_msg::{ExecuteMsg, LiquidStakeRateResponse, QueryMsg};
+use cosmwasm_std::{Addr, Api, StdResult};
 
 use crate::ContractError;
-
-/// CwTemplateContract is a wrapper around Addr that provides a lot of helpers
-/// for working with this.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
-pub struct CwTemplateContract(pub Addr);
-
-impl CwTemplateContract {
-    pub fn addr(&self) -> Addr {
-        self.0.clone()
-    }
-
-    pub fn call<T: Into<ExecuteMsg>>(&self, msg: T) -> StdResult<CosmosMsg> {
-        let msg = to_json_binary(&msg.into())?;
-        Ok(WasmMsg::Execute {
-            contract_addr: self.addr().into(),
-            msg,
-            funds: vec![],
-        }
-        .into())
-    }
-
-    /// Get Count
-    pub fn count<Q, T, CQ>(&self, querier: &Q) -> StdResult<LiquidStakeRateResponse>
-    where
-        Q: Querier,
-        T: Into<String>,
-        CQ: CustomQuery,
-    {
-        let msg = QueryMsg::Config {};
-        let query = WasmQuery::Smart {
-            contract_addr: self.addr().into(),
-            msg: to_json_binary(&msg)?,
-        }
-        .into();
-        let res: LiquidStakeRateResponse = QuerierWrapper::<CQ>::new(querier).query(&query)?;
-        Ok(res)
-    }
-}
 
 /// This helper function is to validate an optional string passed for address
 pub fn option_string_to_addr(
@@ -86,4 +40,77 @@ pub fn validate_native_denom(denom: &str) -> Result<(), ContractError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use cosmwasm_std::testing::mock_dependencies;
+    use cosmwasm_std::Addr;
+
+    use crate::helpers::{option_string_to_addr, validate_native_denom};
+    use crate::ContractError;
+
+    #[test]
+    fn validate_option_string_to_addr() {
+        let deps = mock_dependencies();
+        let res = option_string_to_addr(&deps.api, None, Addr::unchecked("cosmos2"));
+        assert_eq!(res, Ok(Addr::unchecked("cosmos2")),);
+    }
+
+    #[test]
+    fn length_below_three() {
+        let res = validate_native_denom("su");
+        assert_eq!(
+            res,
+            Err(ContractError::InvalidDenom {
+                reason: "Invalid denom length".to_string()
+            }),
+        )
+    }
+
+    #[test]
+    fn length_above_128() {
+        let res =
+            validate_native_denom("fdtycan4k33uu4ph8hhr0bnjdx94pndw7j09i3jm2afiv0980brzdn1xy7nyky0mfkxwnrtrb6d4vh1vqg2abtwvwzpa3r2ydr0wevp2d7uqqpywrpnq1627id48tm7rt");
+        assert_eq!(
+            res,
+            Err(ContractError::InvalidDenom {
+                reason: "Invalid denom length".to_string()
+            }),
+        )
+    }
+
+    #[test]
+    fn first_char_not_alphabetical() {
+        let res = validate_native_denom("7asdkjnfe7");
+        assert_eq!(
+            res,
+            Err(ContractError::InvalidDenom {
+                reason: "First character is not ASCII alphabetic".to_string()
+            }),
+        )
+    }
+
+    #[test]
+    fn invalid_character() {
+        let res = validate_native_denom("fakjfh&asd!#");
+        assert_eq!(
+            res,
+            Err(ContractError::InvalidDenom {
+                reason: "Not all characters are ASCII alphanumeric or one of:  /  :  .  _  -"
+                    .to_string()
+            }),
+        )
+    }
+
+    #[test]
+    fn correct_denom() {
+        let res = validate_native_denom("umars");
+        assert_eq!(res, Ok(()));
+
+        let res = validate_native_denom(
+            "ibc/NXH1JLDU56SGDRE3DUPTS45AN76QZEM604USXVFXDVYF9AUHD6G93ZC8GE0T0QQU",
+        );
+        assert_eq!(res, Ok(()));
+    }
 }
