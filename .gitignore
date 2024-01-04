@@ -23,7 +23,7 @@ debug-*.log
 # Build artifacts
 hash.txt
 contracts.txt
-artifacts/
+# artifacts/
 tests/internal
 
 # code coverage
@@ -31,3 +31,5 @@ tarpaulin-report.*
 
 packages/*/schema
 contracts/*/schema
+
+**/config.sh

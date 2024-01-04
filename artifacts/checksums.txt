@@ -1,0 +1,2 @@
+bf8b5f87904184e18aaf39009cb0c31b590805fe7e56ff63fd65b5bcf758a32c  liquid_stake_rate.wasm
+04c26ab5602d252495e16d9f13297d685c2ad27afb50c99560e09ed25fce28c9  osmosis_pool_ratesync.wasm

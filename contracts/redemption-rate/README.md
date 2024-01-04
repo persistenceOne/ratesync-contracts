@@ -1,1 +1,0 @@
-# Redemption Rate Contract

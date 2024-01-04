@@ -1,17 +1,18 @@
 [workspace]
-members = ["contracts/*"]
-
-[profile.release.package.redemption-rate]
-opt-level = 3
-debug = false
-debug-assertions = false
-codegen-units = 1
-incremental = false
+members = [
+    "contracts/liquid-stake-rate",
+    "contracts/osmosis-pool-ratesync",
+    "packages/*"
+]
+resolver = "2"
 
 [profile.release]
-rpath = false
-lto = true
-overflow-checks = true
 opt-level = 3
 debug = false
+rpath = false
+lto = true
 debug-assertions = false
+codegen-units = 1
+panic = 'abort'
+incremental = false
+overflow-checks = true
