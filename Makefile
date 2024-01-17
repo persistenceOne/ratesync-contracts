@@ -53,3 +53,8 @@ query-historical:
 query-latest:
 	@echo "Querying latest..."
 	@bash scripts/testnet/query_latest.sh
+
+.PHONY: instantiate-contract
+instantiate-contract:
+	@echo "Instantiating contract..."
+	@bash scripts/testnet/instantiate_contract.sh

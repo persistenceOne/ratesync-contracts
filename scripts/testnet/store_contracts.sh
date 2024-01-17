@@ -10,7 +10,7 @@ function store_contract() {
     CONTRACT_PATH=./artifacts/$1.wasm
 
     echo ">>> $OSMOSISD tx wasm store $CONTRACT_PATH $GAS"
-    tx=$($OSMOSISD tx wasm store $CONTRACT_PATH $GAS --from test -y)
+    tx=$($OSMOSISD tx wasm store $CONTRACT_PATH $GAS --from test -y -o json)
     echo $tx
     tx_hash=$(echo $tx | jq -r .txhash)
 
