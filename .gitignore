@@ -33,3 +33,5 @@ packages/*/schema
 contracts/*/schema
 
 **/config.sh
+
+**/metadata

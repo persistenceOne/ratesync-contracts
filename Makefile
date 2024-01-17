@@ -32,3 +32,24 @@ build-optimized: test
 		--mount type=volume,source="$(notdir $(CURDIR))_cache",target=/target \
 		--mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
 		cosmwasm/optimizer:0.15.0
+
+################# testnet #################
+.PHONY: store-contracts-testnet
+store-contracts-testnet:
+	@echo "Deploying to testnet..."
+	@bash scripts/testnet/store_contracts.sh
+
+.PHONY: query-config
+query-config:
+	@echo "Querying config..."
+	@bash scripts/testnet/query_config.sh
+
+.PHONY: query-historical
+query-historical:
+	@echo "Querying historical..."
+	@bash scripts/testnet/query_historical.sh
+
+.PHONY: query-latest
+query-latest:
+	@echo "Querying latest..."
+	@bash scripts/testnet/query_latest.sh
