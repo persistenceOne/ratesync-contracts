@@ -58,3 +58,8 @@ query-latest:
 instantiate-contract:
 	@echo "Instantiating contract..."
 	@bash scripts/testnet/instantiate_contract.sh
+
+.PHONY: add-pool
+add-pool:
+	@echo "Adding pool..."
+	@bash scripts/testnet/add_pool.sh
