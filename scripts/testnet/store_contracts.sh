@@ -15,7 +15,7 @@ function store_contract() {
     tx_hash=$(echo $tx | jq -r .txhash)
 
     echo "Tx Hash: $tx_hash"
-    echo $tx_hash > $METADATA/store_tx_hash_$1.txt
+    echo "store contract $1: $tx_hash" >> $METADATA/tx_logs.txt
 
     sleep 10
 

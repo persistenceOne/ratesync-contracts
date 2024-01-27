@@ -63,3 +63,13 @@ instantiate-contract:
 add-pool:
 	@echo "Adding pool..."
 	@bash scripts/testnet/add_pool.sh
+
+.PHONY: remove-pool
+remove-pool:
+	@echo "Removing pool..."
+	@bash scripts/testnet/remove_pool.sh
+
+.PHONY: query-all-pools
+query-all-pools:
+	@echo "Querying all pools..."
+	@bash scripts/testnet/query_all_pools.sh

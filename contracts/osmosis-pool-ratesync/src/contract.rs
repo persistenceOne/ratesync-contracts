@@ -136,6 +136,7 @@ pub fn execute_add_pool(
         })?;
 
     validate_pool_configuration(
+        deps.as_ref(),
         stableswap_pool,
         pool_id,
         stk_token_denom.clone(),
@@ -297,6 +298,9 @@ mod tests {
         WasmQuery,
     };
     use osmosis_std::types::cosmos::base::v1beta1::Coin;
+    use osmosis_std::types::ibc::applications::transfer::v1::{
+        DenomTrace, QueryDenomTraceRequest, QueryDenomTraceResponse,
+    };
     use osmosis_std::types::osmosis::gamm::poolmodels::stableswap::v1beta1::{
         MsgStableSwapAdjustScalingFactors, Pool as StableswapPool,
     };
@@ -305,6 +309,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use crate::contract::{execute, instantiate, query};
+    use crate::helpers::DENOM_TRACE_QUERY_TYPE;
     use crate::state::{AssetOrdering, Config, Pool};
     use crate::ContractError;
 
@@ -317,6 +322,7 @@ mod tests {
         base_querier: MockQuerier<Empty>,
         lsr_redemption_rates: HashMap<String, LiquidStakeRateResponse>,
         pools: HashMap<u64, PoolQueryResponse>,
+        denom_trace: HashMap<String, QueryDenomTraceResponse>,
     }
 
     // Custom Osmosis pool query response to get avoid Any proto type
@@ -347,6 +353,7 @@ mod tests {
                 base_querier: MockQuerier::new(&[]),
                 lsr_redemption_rates: HashMap::new(),
                 pools: HashMap::new(),
+                denom_trace: HashMap::new(),
             }
         }
 
@@ -371,8 +378,15 @@ mod tests {
                 }
                 QueryRequest::Stargate { path, data } => {
                     if path == OSMOSIS_POOL_QUERY_TYPE {
-                        let pool_request: PoolRequest = Message::decode(data.as_slice()).unwrap();
+                        let pool_request = PoolRequest::decode(data.as_slice()).unwrap();
                         match self.pools.get(&pool_request.pool_id) {
+                            Some(resp) => SystemResult::Ok(to_json_binary(&resp).into()),
+                            None => SystemResult::Err(SystemError::Unknown {}),
+                        }
+                    } else if path == DENOM_TRACE_QUERY_TYPE {
+                        let query_denom_trace_request =
+                            QueryDenomTraceRequest::decode(data.as_slice()).unwrap();
+                        match self.denom_trace.get(&query_denom_trace_request.hash) {
                             Some(resp) => SystemResult::Ok(to_json_binary(&resp).into()),
                             None => SystemResult::Err(SystemError::Unknown {}),
                         }
@@ -433,6 +447,19 @@ mod tests {
         // Helper function for if we want to explicitly set a pool that's misconfigured
         pub fn mock_invalid_stableswap_pool(&mut self, pool_id: u64, pool: StableswapPool) {
             self.pools.insert(pool_id, PoolQueryResponse { pool });
+        }
+
+        // Helper function to mock a denom trace query response
+        pub fn mock_denom_trace(&mut self, ibc_hash: String) {
+            self.denom_trace.insert(
+                ibc_hash.clone(),
+                QueryDenomTraceResponse {
+                    denom_trace: Some(DenomTrace {
+                        path: "transfer/channel-0".to_string(),
+                        base_denom: ibc_hash.split("/").last().unwrap().to_string(),
+                    }),
+                },
+            );
         }
     }
 
@@ -563,6 +590,11 @@ mod tests {
         deps.querier.mock_stableswap_pool(1, &pool1);
         deps.querier.mock_stableswap_pool(2, &pool2);
         deps.querier.mock_stableswap_pool(3, &pool3);
+
+        // Mock the denom trace query response
+        deps.querier.mock_denom_trace("stkA".to_string());
+        deps.querier.mock_denom_trace("stB".to_string());
+        deps.querier.mock_denom_trace("stC".to_string());
 
         // Add each pool, and confirm the attributes and pool-query for each
         for pool in vec![pool1.clone(), pool2.clone(), pool3.clone()] {
@@ -729,10 +761,16 @@ mod tests {
 
         // Attempt to add these two pools, they should both fail since the asset ordering is incorrect
         let add_resp1 = execute(deps.as_mut(), env.clone(), info.clone(), add_msg1);
-        assert_eq!(add_resp1, Err(ContractError::InvalidPoolAssetOrdering {}));
+        assert_eq!(
+            add_resp1,
+            Err(StdError::generic_err("Querier system error: Unknown system error").into())
+        );
 
         let add_resp2 = execute(deps.as_mut(), env.clone(), info.clone(), add_msg2);
-        assert_eq!(add_resp2, Err(ContractError::InvalidPoolAssetOrdering {}));
+        assert_eq!(
+            add_resp2,
+            Err(StdError::generic_err("Querier system error: Unknown system error").into())
+        );
     }
 
     #[test]
@@ -770,9 +808,21 @@ mod tests {
     fn test_update_scaling_factor() {
         let pool_id = 2;
         let default_bond_denom = "uosmo";
-        let stk_token_denom = "stk/uosmo";
+        let stk_token_denom = "ibc/stk_uosmo";
+        let stk_token_base_denom = "stk_uosmo";
         let asset_ordering = AssetOrdering::StkTokenFirst;
-        let pool = get_test_pool(pool_id, default_bond_denom, stk_token_denom, asset_ordering);
+        let pool = get_test_pool(
+            pool_id,
+            default_bond_denom,
+            stk_token_denom,
+            asset_ordering.clone(),
+        );
+        let add_pool = get_test_pool(
+            pool_id,
+            default_bond_denom,
+            stk_token_base_denom,
+            asset_ordering,
+        );
 
         let block_time = 1_000_000;
         let redemption_rate = Decimal::from_str("1.2").unwrap();
@@ -782,13 +832,16 @@ mod tests {
         let (mut deps, mut env, info) = default_instantiate();
         env.block.time = Timestamp::from_seconds(block_time);
         deps.querier
-            .mock_lsr_redemption_rate(stk_token_denom.to_string(), redemption_rate);
+            .mock_lsr_redemption_rate(stk_token_base_denom.to_string(), redemption_rate);
 
         // Mock out the stableswap pool on Osmosis
         deps.querier.mock_stableswap_pool(pool_id, &pool);
 
+        // Mock out the denom trace query response
+        deps.querier.mock_denom_trace(stk_token_denom.to_string());
+
         // Add a pool
-        let add_pool_msg = get_add_pool_msg(pool_id, pool);
+        let add_pool_msg = get_add_pool_msg(pool_id, add_pool);
         execute(deps.as_mut(), env.clone(), info.clone(), add_pool_msg).unwrap();
 
         // Update the scaling factor

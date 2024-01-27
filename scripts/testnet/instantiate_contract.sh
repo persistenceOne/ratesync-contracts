@@ -24,7 +24,7 @@ echo $tx
 tx_hash=$(echo $tx | jq -r .txhash)
 
 echo "Tx Hash: $tx_hash"
-echo $tx_hash > $METADATA/instantiate_tx_hash_$CONTRACT2.txt
+echo "instantiate $CONTRACT2: $tx_hash" >> $METADATA/tx_logs.txt
 
 sleep 10
 
