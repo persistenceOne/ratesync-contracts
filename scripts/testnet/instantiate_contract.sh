@@ -19,7 +19,7 @@ EOF
 echo "Instantiating contract..."
 
 echo ">>> $OSMOSISD tx wasm instantiate $code_id $init_msg"
-tx=$($OSMOSISD tx wasm instantiate $code_id "$init_msg" --from test --label "persistence_osmosis_ratesync" --no-admin $GAS -y -o json)
+tx=$($OSMOSISD tx wasm instantiate $code_id "$init_msg" --from test --label "persistence_osmosis_ratesync" --admin $owner_address $GAS -y -o json)
 echo $tx
 tx_hash=$(echo $tx | jq -r .txhash)
 
