@@ -32,3 +32,44 @@ build-optimized: test
 		--mount type=volume,source="$(notdir $(CURDIR))_cache",target=/target \
 		--mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
 		cosmwasm/optimizer:0.15.0
+
+################# testnet #################
+.PHONY: store-contracts-testnet
+store-contracts-testnet:
+	@echo "Deploying to testnet..."
+	@bash scripts/testnet/store_contracts.sh
+
+.PHONY: query-config
+query-config:
+	@echo "Querying config..."
+	@bash scripts/testnet/query_config.sh
+
+.PHONY: query-historical
+query-historical:
+	@echo "Querying historical..."
+	@bash scripts/testnet/query_historical.sh
+
+.PHONY: query-latest
+query-latest:
+	@echo "Querying latest..."
+	@bash scripts/testnet/query_latest.sh
+
+.PHONY: instantiate-contract
+instantiate-contract:
+	@echo "Instantiating contract..."
+	@bash scripts/testnet/instantiate_contract.sh
+
+.PHONY: add-pool
+add-pool:
+	@echo "Adding pool..."
+	@bash scripts/testnet/add_pool.sh
+
+.PHONY: remove-pool
+remove-pool:
+	@echo "Removing pool..."
+	@bash scripts/testnet/remove_pool.sh
+
+.PHONY: query-all-pools
+query-all-pools:
+	@echo "Querying all pools..."
+	@bash scripts/testnet/query_all_pools.sh

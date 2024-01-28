@@ -25,6 +25,9 @@ pub enum ContractError {
     #[error("Pool {pool_id} not found on Osmosis")]
     PoolNotFoundOsmosis { pool_id: u64 },
 
+    #[error("Invalid denom: {denom}")]
+    InvalidDenom { denom: String },
+
     #[error("The specified asset ordering does not match the underlying pool")]
     InvalidPoolAssetOrdering {},
 
