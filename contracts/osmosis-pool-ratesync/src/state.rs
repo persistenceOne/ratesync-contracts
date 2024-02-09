@@ -17,10 +17,14 @@ pub struct Config {
 pub struct Pool {
     /// Pool ID of the Osmosis pool (e.g. 886)
     pub pool_id: u64,
-    /// Default bond denom of the Osmosis pool (e.g. uatom)
-    pub default_bond_denom: String,
     /// The denom of the stkToken as it lives on Osmosis (e.g. ibc/{hash(transfer/channel-0/stkuatom)})
     pub stk_token_denom: String,
+    /// The transfer port id
+    pub transfer_port_id: String,
+    /// The transfer channel id
+    pub transfer_channel_id: String,
+    /// The ibc hash of stkToken
+    pub ibc_hash_stk_denom: String,
     /// The ordering of the stkToken vs nativeToken assets in the Osmosis pool,
     pub asset_ordering: AssetOrdering,
     /// The last time (in unix timestamp) that the scaling factors were updated

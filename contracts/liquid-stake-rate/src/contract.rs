@@ -13,10 +13,11 @@ use ratesync::{
     lsr_state::{Config, History, RedemptionRate, CONFIG, LIQUID_STAKE_RATES},
 };
 
-use crate::helpers::{option_string_to_addr, validate_native_denom};
-use crate::{
-    error::ContractError,
-    helpers::{denom_trace_to_hash, validate_channel_id},
+use ratesync::{
+    lsr_error::ContractError,
+    lsr_helpers::{
+        denom_trace_to_hash, option_string_to_addr, validate_channel_id, validate_native_denom,
+    },
 };
 
 // version info for migration info

@@ -1,7 +1,7 @@
 use cosmwasm_std::{Addr, Api, StdResult};
 use sha2::{Digest, Sha256};
 
-use crate::ContractError;
+use crate::lsr_error::ContractError;
 
 const CHANNEL_ID_PERFIX: &str = "channel";
 
@@ -98,10 +98,12 @@ mod tests {
     use cosmwasm_std::testing::mock_dependencies;
     use cosmwasm_std::Addr;
 
-    use crate::helpers::{
-        denom_trace_to_hash, option_string_to_addr, validate_channel_id, validate_native_denom,
+    use crate::{
+        lsr_error::ContractError,
+        lsr_helpers::{
+            denom_trace_to_hash, option_string_to_addr, validate_channel_id, validate_native_denom,
+        },
     };
-    use crate::ContractError;
 
     #[test]
     fn validate_option_string_to_addr() {
