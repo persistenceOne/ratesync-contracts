@@ -1,21 +1,23 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_json_binary, Addr, Binary, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdError,
-    StdResult,
+    to_json_binary, Binary, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult,
 };
 use cw2::set_contract_version;
 
 use ratesync::{
     lsr_msg::{
-        ConfigResponse, ExecuteMsg, InstantiateMsg, LiquidStakeRateResponse, LiquidStakeRates,
-        QueryMsg,
+        ConfigResponse, ExecuteMsg, InstantiateMsg, QueryMsg, RedemptionRateResponse,
+        RedemptionRates,
     },
-    lsr_state::{Config, History, LiquidStakeRate, CONFIG, LIQUID_STAKE_RATES},
+    lsr_state::{Config, History, RedemptionRate, CONFIG, LIQUID_STAKE_RATES},
 };
 
-use crate::error::ContractError;
 use crate::helpers::{option_string_to_addr, validate_native_denom};
+use crate::{
+    error::ContractError,
+    helpers::{denom_trace_to_hash, validate_channel_id},
+};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:liquid-stake-rate";
@@ -30,17 +32,22 @@ pub fn instantiate(
 ) -> Result<Response, ContractError> {
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
+    validate_channel_id(&msg.transfer_channel_i_d)?;
+
     CONFIG.save(
         deps.storage,
         &Config {
             owner: option_string_to_addr(deps.api, msg.admin, info.sender.clone())?,
-            new_owner: Addr::unchecked(""),
+            transfer_channel_i_d: msg.transfer_channel_i_d.clone(),
+            transfer_port_i_d: msg.transfer_port_i_d.clone(),
         },
     )?;
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
-        .add_attribute("owner", info.sender))
+        .add_attribute("owner", info.sender)
+        .add_attribute("transfer_channel_id", msg.transfer_channel_i_d)
+        .add_attribute("transfer_port_id", msg.transfer_port_i_d))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -85,23 +92,35 @@ pub fn execute_liquid_stake_rate(
 
     validate_native_denom(&default_bond_denom.clone())?;
 
-    let key = format!("{}:{}", default_bond_denom, stk_denom).into_bytes();
-    let new_liquid_stake_rate = LiquidStakeRate {
-        c_value,
-        last_updated: controller_chain_time,
+    let stk_denom_ibc_hash = denom_trace_to_hash(
+        &stk_denom,
+        &config.transfer_port_i_d,
+        &config.transfer_channel_i_d,
+    )?;
+
+    let new_liquid_stake_rate = RedemptionRate {
+        denom: stk_denom_ibc_hash.clone(),
+        redemption_rate: c_value,
+        update_time: controller_chain_time,
     };
 
-    let mut liquid_stake_rate_history = match LIQUID_STAKE_RATES.may_load(deps.storage, &key)? {
-        Some(history) => history,
-        None => History::<LiquidStakeRate>::default(),
-    };
+    let mut liquid_stake_rate_history =
+        match LIQUID_STAKE_RATES.may_load(deps.storage, &stk_denom_ibc_hash.clone())? {
+            Some(history) => history,
+            None => History::<RedemptionRate>::default(),
+        };
     liquid_stake_rate_history.add(new_liquid_stake_rate);
-    LIQUID_STAKE_RATES.save(deps.storage, &key, &liquid_stake_rate_history)?;
+    LIQUID_STAKE_RATES.save(
+        deps.storage,
+        &stk_denom_ibc_hash,
+        &liquid_stake_rate_history,
+    )?;
 
     Ok(Response::new()
         .add_attribute("action", "set_liquid_stake_rate")
         .add_attribute("default_bond_denom", default_bond_denom)
         .add_attribute("stk_denom", stk_denom)
+        .add_attribute("stk_denom_ibc_hash", stk_denom_ibc_hash)
         .add_attribute("c_value", c_value.to_string())
         .add_attribute("controller_chain_time", controller_chain_time.to_string()))
 }
@@ -111,25 +130,17 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::Config {} => to_json_binary(&query_config(deps)?),
 
-        QueryMsg::LiquidStakeRate {
-            default_bond_denom,
-            stk_denom,
-        } => to_json_binary(&get_latest_liquid_stake_rate(
-            deps,
-            default_bond_denom,
-            stk_denom,
-        )?),
+        QueryMsg::RedemptionRate { denom, params } => {
+            to_json_binary(&get_latest_liquid_stake_rate(deps, denom, params)?)
+        }
 
-        QueryMsg::HistoricalLiquidStakeRates {
-            default_bond_denom,
-            stk_denom,
+        QueryMsg::HistoricalRedemptionRates {
+            denom,
+            params,
             limit,
             ..
         } => to_json_binary(&get_historical_liquid_stake_rates(
-            deps,
-            default_bond_denom,
-            stk_denom,
-            limit,
+            deps, denom, params, limit,
         )?),
     }
 }
@@ -144,17 +155,21 @@ fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
 
 pub fn get_latest_liquid_stake_rate(
     deps: Deps,
-    default_bond_denom: String,
-    stk_denom: String,
-) -> StdResult<LiquidStakeRateResponse> {
-    let key = format!("{}:{}", default_bond_denom, stk_denom).into_bytes();
-    let liquid_stake_rates_history: History<LiquidStakeRate> =
-        LIQUID_STAKE_RATES.load(deps.storage, &key)?;
+    ibc_denom: String,
+    extra: Option<Binary>,
+) -> StdResult<RedemptionRateResponse> {
+    if extra.is_some() {
+        return Err(StdError::generic_err(
+            "invalid query request - params must be None",
+        ));
+    }
+
+    let liquid_stake_rates_history = LIQUID_STAKE_RATES.load(deps.storage, &ibc_denom)?;
 
     match liquid_stake_rates_history.get_latest() {
-        Some(response) => Ok(LiquidStakeRateResponse {
-            c_value: response.c_value,
-            last_updated: response.last_updated,
+        Some(response) => Ok(RedemptionRateResponse {
+            redemption_rate: response.redemption_rate,
+            update_time: response.update_time,
         }),
         None => Err(StdError::generic_err("liquid stake rate not found")),
     }
@@ -162,18 +177,25 @@ pub fn get_latest_liquid_stake_rate(
 
 pub fn get_historical_liquid_stake_rates(
     deps: Deps,
-    default_bond_denom: String,
-    stk_denom: String,
+    ibc_denom: String,
+    extra: Option<Binary>,
     limit: Option<u64>,
-) -> StdResult<LiquidStakeRates> {
-    let key = format!("{}:{}", default_bond_denom, stk_denom).into_bytes();
-    let liquid_stake_rates_history = LIQUID_STAKE_RATES.load(deps.storage, &key)?;
+) -> StdResult<RedemptionRates> {
+    if extra.is_some() {
+        return Err(StdError::generic_err(
+            "invalid query request - params must be None",
+        ));
+    }
+
+    let liquid_stake_rates_history = LIQUID_STAKE_RATES.load(deps.storage, &ibc_denom)?;
 
     let c_value_rates = match limit {
         Some(limit) => liquid_stake_rates_history.get_latest_range(limit as usize),
         None => liquid_stake_rates_history.get_all(),
     };
-    Ok(LiquidStakeRates { c_value_rates })
+    Ok(RedemptionRates {
+        redemption_rates: c_value_rates,
+    })
 }
 
 #[cfg(test)]
@@ -194,6 +216,8 @@ mod tests {
 
         let msg = InstantiateMsg {
             admin: Some("owner".to_string()),
+            transfer_channel_i_d: "channel-0".to_string(),
+            transfer_port_i_d: "transfer".to_string(),
         };
         let info = mock_info(OWNER_ADDRESS, &coins(1000, "earth"));
 
@@ -204,6 +228,8 @@ mod tests {
             vec![
                 attr("method", "instantiate"),
                 attr("owner", OWNER_ADDRESS.to_string()),
+                attr("transfer_channel_id", "channel-0".to_string()),
+                attr("transfer_port_id", "transfer".to_string())
             ]
         );
 
@@ -226,18 +252,20 @@ mod tests {
 
         let _res = execute(deps.as_mut(), env, info, msg).unwrap();
 
+        let ibc_hash_denom = denom_trace_to_hash("somecoin2", "transfer", "channel-0").unwrap();
+
         // it worked, let's query the state
         let res = query(
             deps.as_ref(),
             mock_env(),
-            QueryMsg::LiquidStakeRate {
-                default_bond_denom: "somecoin1".to_string(),
-                stk_denom: "somecoin2".to_string(),
+            QueryMsg::RedemptionRate {
+                denom: ibc_hash_denom,
+                params: None,
             },
         )
         .unwrap();
-        let value: LiquidStakeRateResponse = from_json(res).unwrap();
-        assert_eq!(Decimal::percent(1), value.c_value);
+        let value: RedemptionRateResponse = from_json(res).unwrap();
+        assert_eq!(Decimal::percent(1), value.redemption_rate);
     }
 
     #[test]
@@ -266,7 +294,8 @@ mod tests {
         let (mut deps, env, info) = default_instantiate();
 
         let default_bond_denom = "somecoin1".to_string();
-        let stk_denom = "somecoin2".to_string();
+        let stk_denom = "stk/somecoin1".to_string();
+        let ibc_hash_denom = denom_trace_to_hash(&stk_denom, "transfer", "channel-0").unwrap();
 
         let msg1 = get_execute_msg(default_bond_denom.clone(), stk_denom.clone(), "1", 1);
         let msg2 = get_execute_msg(default_bond_denom.clone(), stk_denom.clone(), "2", 2);
@@ -284,32 +313,32 @@ mod tests {
         execute(deps.as_mut(), env.clone(), info, msg4).unwrap();
 
         // Check the corresponding liquid stake rate query
-        let msg = QueryMsg::HistoricalLiquidStakeRates {
-            default_bond_denom: default_bond_denom.clone(),
-            stk_denom: stk_denom.clone(),
+        let msg = QueryMsg::HistoricalRedemptionRates {
+            denom: ibc_hash_denom.clone(),
+            params: None,
             limit: None,
         };
         let resp = query(deps.as_ref(), env.clone(), msg).unwrap();
-        let history_response: LiquidStakeRates = from_json(resp).unwrap();
+        let history_response: RedemptionRates = from_json(resp).unwrap();
         assert_eq!(
             history_response,
-            LiquidStakeRates {
-                c_value_rates: vec![rr3.clone(), rr2.clone(), rr1.clone()]
+            RedemptionRates {
+                redemption_rates: vec![rr3.clone(), rr2.clone(), rr1.clone()]
             }
         );
 
         // Check the liquid stake rate query with a limit
-        let msg = QueryMsg::HistoricalLiquidStakeRates {
-            default_bond_denom: default_bond_denom.clone(),
-            stk_denom: stk_denom.clone(),
+        let msg = QueryMsg::HistoricalRedemptionRates {
+            denom: ibc_hash_denom.clone(),
+            params: None,
             limit: Some(2),
         };
         let resp = query(deps.as_ref(), env, msg).unwrap();
-        let history_response: LiquidStakeRates = from_json(resp).unwrap();
+        let history_response: RedemptionRates = from_json(resp).unwrap();
         assert_eq!(
             history_response,
-            LiquidStakeRates {
-                c_value_rates: vec![rr3, rr2]
+            RedemptionRates {
+                redemption_rates: vec![rr3, rr2]
             }
         );
     }
@@ -323,16 +352,16 @@ mod tests {
         let msg1_old =
             get_execute_msg("somecoin1".to_string(), "stk/somecoin1".to_string(), "1", 0);
         let msg2_old =
-            get_execute_msg("somecoin2".to_string(), "stk/somecoin1".to_string(), "2", 0);
+            get_execute_msg("somecoin2".to_string(), "stk/somecoin2".to_string(), "2", 0);
         let msg3_old =
-            get_execute_msg("somecoin3".to_string(), "stk/somecoin1".to_string(), "3", 0);
+            get_execute_msg("somecoin3".to_string(), "stk/somecoin3".to_string(), "3", 0);
 
         let msg1_new =
             get_execute_msg("somecoin1".to_string(), "stk/somecoin1".to_string(), "1", 1);
         let msg2_new =
-            get_execute_msg("somecoin2".to_string(), "stk/somecoin1".to_string(), "2", 2);
+            get_execute_msg("somecoin2".to_string(), "stk/somecoin2".to_string(), "2", 2);
         let msg3_new =
-            get_execute_msg("somecoin3".to_string(), "stk/somecoin1".to_string(), "3", 3);
+            get_execute_msg("somecoin3".to_string(), "stk/somecoin3".to_string(), "3", 3);
 
         // Execute each message
         execute(deps.as_mut(), env.clone(), info.clone(), msg1_old).unwrap();
@@ -343,47 +372,54 @@ mod tests {
         execute(deps.as_mut(), env.clone(), info.clone(), msg2_new).unwrap();
         execute(deps.as_mut(), env.clone(), info, msg3_new).unwrap();
 
+        let ibc_hash_denom1 =
+            denom_trace_to_hash("stk/somecoin1", "transfer", "channel-0").unwrap();
+        let ibc_hash_denom2 =
+            denom_trace_to_hash("stk/somecoin2", "transfer", "channel-0").unwrap();
+        let ibc_hash_denom3 =
+            denom_trace_to_hash("stk/somecoin3", "transfer", "channel-0").unwrap();
+
         // Confirm all msgs are preset and are sorted
-        let query_msg1 = QueryMsg::LiquidStakeRate {
-            default_bond_denom: "somecoin1".to_string(),
-            stk_denom: "stk/somecoin1".to_string(),
+        let query_msg1 = QueryMsg::RedemptionRate {
+            denom: ibc_hash_denom1.clone(),
+            params: None,
         };
-        let query_msg2 = QueryMsg::LiquidStakeRate {
-            default_bond_denom: "somecoin2".to_string(),
-            stk_denom: "stk/somecoin1".to_string(),
+        let query_msg2 = QueryMsg::RedemptionRate {
+            denom: ibc_hash_denom2.clone(),
+            params: None,
         };
-        let query_msg3 = QueryMsg::LiquidStakeRate {
-            default_bond_denom: "somecoin3".to_string(),
-            stk_denom: "stk/somecoin1".to_string(),
+        let query_msg3 = QueryMsg::RedemptionRate {
+            denom: ibc_hash_denom3.clone(),
+            params: None,
         };
 
         let resp1 = query(deps.as_ref(), env.clone(), query_msg1).unwrap();
         let resp2 = query(deps.as_ref(), env.clone(), query_msg2).unwrap();
         let resp3 = query(deps.as_ref(), env, query_msg3).unwrap();
 
-        let msg_responses1: LiquidStakeRate = from_json(resp1).unwrap();
-        let msg_responses2: LiquidStakeRate = from_json(resp2).unwrap();
-        let msg_responses3: LiquidStakeRate = from_json(resp3).unwrap();
+        let msg_responses1: RedemptionRateResponse = from_json(resp1).unwrap();
+        let msg_responses2: RedemptionRateResponse = from_json(resp2).unwrap();
+        let msg_responses3: RedemptionRateResponse = from_json(resp3).unwrap();
 
         assert_eq!(
             msg_responses1,
-            LiquidStakeRate {
-                c_value: Decimal::from_str("1").unwrap(),
-                last_updated: 1,
+            RedemptionRateResponse {
+                redemption_rate: Decimal::from_str("1").unwrap(),
+                update_time: 1,
             }
         );
         assert_eq!(
             msg_responses2,
-            LiquidStakeRate {
-                c_value: Decimal::from_str("2").unwrap(),
-                last_updated: 2,
+            RedemptionRateResponse {
+                redemption_rate: Decimal::from_str("2").unwrap(),
+                update_time: 2,
             }
         );
         assert_eq!(
             msg_responses3,
-            LiquidStakeRate {
-                c_value: Decimal::from_str("3").unwrap(),
-                last_updated: 3,
+            RedemptionRateResponse {
+                redemption_rate: Decimal::from_str("3").unwrap(),
+                update_time: 3,
             }
         )
     }
@@ -400,6 +436,8 @@ mod tests {
 
         let msg = InstantiateMsg {
             admin: Some(OWNER_ADDRESS.to_string()),
+            transfer_channel_i_d: "channel-0".to_string(),
+            transfer_port_i_d: "transfer".to_string(),
         };
         let _res = instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
 
@@ -407,10 +445,12 @@ mod tests {
     }
 
     // helper function to get a test liquid stake rate
-    fn get_test_liquid_stake_rate(value: &str, time: u64) -> LiquidStakeRate {
-        LiquidStakeRate {
-            c_value: Decimal::from_str(value).unwrap(),
-            last_updated: time,
+    fn get_test_liquid_stake_rate(value: &str, time: u64) -> RedemptionRate {
+        let ibc_hash_denom = denom_trace_to_hash("stk/somecoin1", "transfer", "channel-0").unwrap();
+        RedemptionRate {
+            denom: ibc_hash_denom.clone(),
+            redemption_rate: Decimal::from_str(value).unwrap(),
+            update_time: time,
         }
     }
 

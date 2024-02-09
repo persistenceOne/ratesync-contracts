@@ -47,7 +47,7 @@ pub enum QueryMsg {
     #[returns(crate::state::Config)]
     Config {},
 
-    /// Returns a the configuration for a specific stToken stableswap pool
+    /// Returns a the configuration for a specific stkToken stableswap pool
     #[returns(crate::state::Pool)]
     Pool { pool_id: u64 },
 

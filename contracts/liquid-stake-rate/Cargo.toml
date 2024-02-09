@@ -40,6 +40,8 @@ schema = "0.1.0"
 schemars = "0.8.12"
 serde = { version = "1.0.145", default-features = false, features = ["derive"] }
 thiserror = "1.0.47"
+sha2 = "0.10.7"
+hex = "0.4.3"
 
 [dev-dependencies]
 cw-multi-test = "0.16.2"

@@ -1,31 +1,34 @@
 use std::collections::VecDeque;
 
 use cosmwasm_schema::cw_serde;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 use cosmwasm_std::{Addr, Decimal};
 use cw_storage_plus::{Item, Map};
 
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, JsonSchema)]
+#[cw_serde]
 pub struct Config {
     /// Contract owner
     pub owner: Addr,
-    /// New contract owner, temporary holding value
-    pub new_owner: Addr,
+    /// Transfer Channel ID
+    pub transfer_channel_i_d: String,
+    /// Transfer Port ID
+    pub transfer_port_i_d: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, JsonSchema)]
-pub struct LiquidStakeRate {
-    /// Rate for the denom pair
-    pub c_value: Decimal,
-    /// Last time the rate was updated
-    pub last_updated: u64,
+/// The RedemptionRate struct represents the c-value of an stkToken
+#[cw_serde]
+pub struct RedemptionRate {
+    /// stkToken denom as an IBC hash, as it appears on the oracle chain
+    pub denom: String,
+    /// The c-value of the stkToken
+    pub redemption_rate: Decimal,
+    /// The unix timestamp representing when the c-value was last updated
+    pub update_time: u64,
 }
 
-impl HasTime for LiquidStakeRate {
+impl HasTime for RedemptionRate {
     fn time(&self) -> u64 {
-        self.last_updated
+        self.update_time
     }
 }
 
@@ -85,4 +88,4 @@ impl<T: HasTime + Clone> History<T> {
 
 pub const CONFIG: Item<Config> = Item::new("config");
 
-pub const LIQUID_STAKE_RATES: Map<&[u8], History<LiquidStakeRate>> = Map::new("liquid_stake_rate");
+pub const LIQUID_STAKE_RATES: Map<&str, History<RedemptionRate>> = Map::new("liquid_stake_rate");

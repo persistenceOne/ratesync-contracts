@@ -10,7 +10,7 @@ use osmosis_std::types::osmosis::gamm::poolmodels::stableswap::v1beta1::{
 };
 use osmosis_std::types::osmosis::poolmanager::v1beta1::PoolmanagerQuerier;
 
-use ratesync::lsr_msg::{LiquidStakeRateResponse, QueryMsg as LiquidStakeRateQueryMsg};
+use ratesync::lsr_msg::{QueryMsg as LiquidStakeRateQueryMsg, RedemptionRateResponse};
 
 use crate::{
     error::ContractError,
@@ -194,13 +194,13 @@ pub fn execute_update_scaling_factor(
 
     let redemption_rate_query_msg = QueryRequest::Wasm(WasmQuery::Smart {
         contract_addr: lsr_contract_address.to_string(),
-        msg: to_json_binary(&LiquidStakeRateQueryMsg::LiquidStakeRate {
-            default_bond_denom: pool.default_bond_denom.clone(),
-            stk_denom: pool.stk_token_denom.clone(),
+        msg: to_json_binary(&LiquidStakeRateQueryMsg::RedemptionRate {
+            denom: pool.stk_token_denom.clone(),
+            params: None,
         })?,
     });
 
-    let redemption_rate_response: LiquidStakeRateResponse = deps
+    let redemption_rate_response: RedemptionRateResponse = deps
         .querier
         .query(&redemption_rate_query_msg)
         .map_err(|err| ContractError::UnableToQueryRedemptionRate {
@@ -209,7 +209,7 @@ pub fn execute_update_scaling_factor(
             error: err.to_string(),
         })?;
 
-    let redemption_rate = redemption_rate_response.c_value;
+    let redemption_rate = redemption_rate_response.redemption_rate;
     let scaling_factors =
         convert_redemption_rate_to_scaling_factors(redemption_rate, pool.asset_ordering.clone());
 
@@ -320,7 +320,7 @@ mod tests {
 
     pub struct WasmMockQuerier {
         base_querier: MockQuerier<Empty>,
-        lsr_redemption_rates: HashMap<String, LiquidStakeRateResponse>,
+        lsr_redemption_rates: HashMap<String, RedemptionRateResponse>,
         pools: HashMap<u64, PoolQueryResponse>,
         denom_trace: HashMap<String, QueryDenomTraceResponse>,
     }
@@ -364,8 +364,8 @@ mod tests {
                 QueryRequest::Wasm(WasmQuery::Smart { contract_addr, msg }) => {
                     if contract_addr == LSR_CONTRACT_ADDRESS {
                         match from_json(msg).unwrap() {
-                            LiquidStakeRateQueryMsg::LiquidStakeRate { stk_denom, .. } => {
-                                match self.lsr_redemption_rates.get(&stk_denom) {
+                            LiquidStakeRateQueryMsg::RedemptionRate { denom, .. } => {
+                                match self.lsr_redemption_rates.get(&denom) {
                                     Some(resp) => SystemResult::Ok(to_json_binary(&resp).into()),
                                     None => SystemResult::Err(SystemError::Unknown {}),
                                 }
@@ -403,9 +403,9 @@ mod tests {
         pub fn mock_lsr_redemption_rate(&mut self, denom: String, c_value: Decimal) {
             self.lsr_redemption_rates.insert(
                 denom,
-                LiquidStakeRateResponse {
-                    c_value,
-                    last_updated: 1,
+                RedemptionRateResponse {
+                    redemption_rate: c_value,
+                    update_time: 1,
                 },
             );
         }
@@ -747,7 +747,7 @@ mod tests {
     fn test_add_misconfigured_pool_asset_ordering() {
         let (mut deps, env, info) = default_instantiate();
 
-        // Create two pools, one with stToken first, and the other with the stToken second
+        // Create two pools, one with stkToken first, and the other with the stkToken second
         let pool1 = get_test_pool(1, "token", "stk_token", AssetOrdering::StkTokenFirst);
         let pool2 = get_test_pool(2, "token", "stk_token", AssetOrdering::NativeTokenFirst);
 

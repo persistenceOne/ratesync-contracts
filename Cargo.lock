@@ -601,10 +601,12 @@ dependencies = [
  "cw-multi-test",
  "cw-storage-plus",
  "cw2",
+ "hex",
  "ratesync",
  "schema",
  "schemars",
  "serde",
+ "sha2 0.10.7",
  "thiserror",
 ]
 
