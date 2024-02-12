@@ -35,11 +35,6 @@ pub enum ExecuteMsg {
     UpdateScalingFactor {
         pool_id: u64,
     },
-
-    SudoAdjustScalingFactors {
-        pool_id: u64,
-        scaling_factors: Vec<u64>,
-    },
 }
 
 #[cw_serde]

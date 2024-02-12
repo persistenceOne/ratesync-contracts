@@ -77,13 +77,8 @@ pub fn execute(
             asset_ordering,
         ),
         ExecuteMsg::RemovePool { pool_id } => execute_remove_pool(deps, info, pool_id),
-        ExecuteMsg::UpdateScalingFactor { pool_id } => {
+        ExecuteMsg::UpdateScalingFactor { pool_id } => 
             execute_update_scaling_factor(deps, env, pool_id)
-        }
-        ExecuteMsg::SudoAdjustScalingFactors {
-            pool_id,
-            scaling_factors,
-        } => execute_sudo_adjust_scaling_factors(deps, env, info, pool_id, scaling_factors),
     }
 }
 
@@ -809,14 +804,6 @@ mod tests {
         let remove_resp = execute(deps.as_mut(), env.clone(), invalid_info.clone(), remove_msg);
 
         assert_eq!(remove_resp, Err(ContractError::Unauthorized {}));
-
-        let adjust_msg = ExecuteMsg::SudoAdjustScalingFactors {
-            pool_id: 1,
-            scaling_factors: vec![1, 1],
-        };
-        let adjust_resp = execute(deps.as_mut(), env, invalid_info, adjust_msg);
-
-        assert_eq!(adjust_resp, Err(ContractError::Unauthorized {}));
     }
 
     #[test]
@@ -888,35 +875,5 @@ mod tests {
             update_pool_resp,
             Err(ContractError::PoolNotFound { pool_id: 1 })
         );
-    }
-
-    #[test]
-    fn test_sudo_adjust_scaling_factor() {
-        let (mut deps, env, info) = default_instantiate();
-
-        let adjust_msg = ExecuteMsg::SudoAdjustScalingFactors {
-            pool_id: 2,
-            scaling_factors: vec![1, 1],
-        };
-        let adjust_resp = execute(deps.as_mut(), env.clone(), info, adjust_msg).unwrap();
-
-        assert_eq!(
-            adjust_resp.attributes,
-            vec![
-                attr("action", "sudo_adjust_scaling_factors"),
-                attr("pool_id", "2"),
-                attr("scaling_factors", "[1,1]"),
-            ]
-        );
-
-        let expected_adjust_msg: CosmosMsg = MsgStableSwapAdjustScalingFactors {
-            sender: env.contract.address.to_string(),
-            pool_id: 2,
-            scaling_factors: vec![1, 1],
-        }
-        .into();
-
-        assert_eq!(adjust_resp.messages.len(), 1);
-        assert_eq!(adjust_resp.messages[0].msg, expected_adjust_msg);
     }
 }
