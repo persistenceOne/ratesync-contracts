@@ -77,8 +77,9 @@ pub fn execute(
             asset_ordering,
         ),
         ExecuteMsg::RemovePool { pool_id } => execute_remove_pool(deps, info, pool_id),
-        ExecuteMsg::UpdateScalingFactor { pool_id } => 
+        ExecuteMsg::UpdateScalingFactor { pool_id } => {
             execute_update_scaling_factor(deps, env, pool_id)
+        }
     }
 }
 
