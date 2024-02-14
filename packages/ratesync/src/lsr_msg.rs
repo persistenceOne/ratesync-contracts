@@ -13,6 +13,10 @@ pub struct InstantiateMsg {
     pub transfer_channel_i_d: String,
     /// Transfer Port ID
     pub transfer_port_i_d: String,
+    /// Deviation Count limit
+    pub deviation_count_limit: Option<u64>,
+    /// Deviation Threshold
+    pub deviation_threshold: Option<Decimal>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -28,6 +32,17 @@ pub enum ExecuteMsg {
         c_value: Decimal,
         /// time
         controller_chain_time: u64,
+    },
+    /// Update config
+    UpdateConfig {
+        /// Transfer Channel ID
+        transfer_channel_i_d: Option<String>,
+        /// Transfer Port ID
+        transfer_port_i_d: Option<String>,
+        /// Deviation Count limit
+        deviation_count_limit: Option<u64>,
+        /// Deviation Threshold
+        deviation_threshold: Option<Decimal>,
     },
 }
 
@@ -64,14 +79,17 @@ pub enum QueryMsg {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, JsonSchema)]
-pub struct ConfigParams {
-    /// Owner address for config update
-    pub owner: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, JsonSchema)]
 pub struct ConfigResponse {
+    /// Owner address for config update
     pub owner: Addr,
+    /// Transfer Channel ID
+    pub transfer_channel_i_d: String,
+    /// Transfer Port ID
+    pub transfer_port_i_d: String,
+    /// Deviation Count limit
+    pub deviation_count_limit: u64,
+    /// Deviation Threshold
+    pub deviation_threshold: Decimal,
 }
 
 #[cw_serde]

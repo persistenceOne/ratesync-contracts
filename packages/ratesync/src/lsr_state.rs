@@ -13,6 +13,10 @@ pub struct Config {
     pub transfer_channel_i_d: String,
     /// Transfer Port ID
     pub transfer_port_i_d: String,
+    /// Contract owner
+    pub count_limit: u64,
+    /// Allowed Deviation threshold
+    pub threshold: Decimal,
 }
 
 /// The RedemptionRate struct represents the c-value of an stkToken

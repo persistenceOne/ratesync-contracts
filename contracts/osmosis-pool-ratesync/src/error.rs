@@ -31,6 +31,9 @@ pub enum ContractError {
     #[error("The underlying pool has {number} of assets, only 2 is allowed")]
     InvalidNumberOfPoolAssets { number: u64 },
 
+    #[error("The scaling factor controller for pool {pool_id} is invalid: {controller}")]
+    InvalidScalingFactorController { pool_id: u64, controller: String },
+
     #[error("LSR error: {0}")]
     LsrError(String),
 }

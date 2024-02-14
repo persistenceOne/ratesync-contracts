@@ -1,11 +1,12 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_json_binary, Binary, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult,
+    to_json_binary, Binary, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdResult,
 };
 use cw2::set_contract_version;
 
 use ratesync::{
+    lsr_helpers::validate_redemption_rate,
     lsr_msg::{
         ConfigResponse, ExecuteMsg, InstantiateMsg, QueryMsg, RedemptionRateResponse,
         RedemptionRates,
@@ -24,6 +25,9 @@ use ratesync::{
 const CONTRACT_NAME: &str = "crates.io:liquid-stake-rate";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+const DEFAULT_DEVIAITON_COUNT_LIMIT: u64 = 10;
+const DEFAULT_DEVIAITON_THRESHOLD: Decimal = Decimal::percent(5);
+
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
@@ -35,12 +39,21 @@ pub fn instantiate(
 
     validate_channel_id(&msg.transfer_channel_i_d)?;
 
+    let count_limit = msg
+        .deviation_count_limit
+        .unwrap_or(DEFAULT_DEVIAITON_COUNT_LIMIT);
+    let threshold = msg
+        .deviation_threshold
+        .unwrap_or(DEFAULT_DEVIAITON_THRESHOLD);
+
     CONFIG.save(
         deps.storage,
         &Config {
             owner: option_string_to_addr(deps.api, msg.admin, info.sender.clone())?,
             transfer_channel_i_d: msg.transfer_channel_i_d.clone(),
             transfer_port_i_d: msg.transfer_port_i_d.clone(),
+            count_limit,
+            threshold,
         },
     )?;
 
@@ -48,7 +61,9 @@ pub fn instantiate(
         .add_attribute("method", "instantiate")
         .add_attribute("owner", info.sender)
         .add_attribute("transfer_channel_id", msg.transfer_channel_i_d)
-        .add_attribute("transfer_port_id", msg.transfer_port_i_d))
+        .add_attribute("transfer_port_id", msg.transfer_port_i_d)
+        .add_attribute("deviation_count_limit", count_limit.to_string())
+        .add_attribute("deviation_threshold", threshold.to_string()))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -64,7 +79,7 @@ pub fn execute(
             stk_denom,
             c_value,
             controller_chain_time,
-        } => execute_liquid_stake_rate(
+        } => execute_add_liquid_stake_rate(
             deps,
             env,
             info,
@@ -73,10 +88,25 @@ pub fn execute(
             c_value,
             controller_chain_time,
         ),
+        ExecuteMsg::UpdateConfig {
+            transfer_channel_i_d,
+            transfer_port_i_d,
+            deviation_count_limit,
+            deviation_threshold,
+        } => execute_update_config(
+            deps,
+            env,
+            info,
+            transfer_channel_i_d,
+            transfer_port_i_d,
+            deviation_count_limit,
+            deviation_threshold,
+        ),
     }
 }
+
 // Set liquid stake rate
-pub fn execute_liquid_stake_rate(
+pub fn execute_add_liquid_stake_rate(
     deps: DepsMut,
     _env: Env,
     info: MessageInfo,
@@ -107,7 +137,11 @@ pub fn execute_liquid_stake_rate(
 
     let mut liquid_stake_rate_history =
         match LIQUID_STAKE_RATES.may_load(deps.storage, &stk_denom_ibc_hash.clone())? {
-            Some(history) => history,
+            Some(history) => {
+                validate_redemption_rate(deps.as_ref(), new_liquid_stake_rate.clone())?;
+
+                history
+            }
             None => History::<RedemptionRate>::default(),
         };
     liquid_stake_rate_history.add(new_liquid_stake_rate);
@@ -124,6 +158,58 @@ pub fn execute_liquid_stake_rate(
         .add_attribute("stk_denom_ibc_hash", stk_denom_ibc_hash)
         .add_attribute("c_value", c_value.to_string())
         .add_attribute("controller_chain_time", controller_chain_time.to_string()))
+}
+
+// Update config
+pub fn execute_update_config(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    transfer_channel_i_d: Option<String>,
+    transfer_port_i_d: Option<String>,
+    deviation_count_limit: Option<u64>,
+    deviation_threshold: Option<Decimal>,
+) -> Result<Response, ContractError> {
+    let mut config = CONFIG.load(deps.storage)?;
+
+    if info.sender != config.owner {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    if let Some(channel_id) = transfer_channel_i_d.clone() {
+        validate_channel_id(&channel_id)?;
+        config.transfer_channel_i_d = channel_id;
+    }
+
+    if let Some(port_id) = transfer_port_i_d.clone() {
+        config.transfer_port_i_d = port_id;
+    }
+
+    if let Some(limit) = deviation_count_limit {
+        config.count_limit = limit;
+    }
+
+    if let Some(threshold) = deviation_threshold {
+        config.threshold = threshold;
+    }
+
+    CONFIG.save(deps.storage, &config)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "update_config")
+        .add_attribute(
+            "transfer_channel_id",
+            transfer_channel_i_d.unwrap_or_default(),
+        )
+        .add_attribute("transfer_port_id", transfer_port_i_d.unwrap_or_default())
+        .add_attribute(
+            "deviation_count_limit",
+            deviation_count_limit.unwrap_or_default().to_string(),
+        )
+        .add_attribute(
+            "deviation_threshold",
+            deviation_threshold.unwrap_or_default().to_string(),
+        ))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -151,6 +237,10 @@ fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
 
     Ok(ConfigResponse {
         owner: config.owner,
+        transfer_channel_i_d: config.transfer_channel_i_d,
+        transfer_port_i_d: config.transfer_port_i_d,
+        deviation_count_limit: config.count_limit,
+        deviation_threshold: config.threshold,
     })
 }
 
@@ -158,11 +248,11 @@ pub fn get_latest_liquid_stake_rate(
     deps: Deps,
     ibc_denom: String,
     extra: Option<Binary>,
-) -> StdResult<RedemptionRateResponse> {
+) -> Result<RedemptionRateResponse, ContractError> {
     if extra.is_some() {
-        return Err(StdError::generic_err(
-            "invalid query request - params must be None",
-        ));
+        return Err(ContractError::InvalidQueryRequest {
+            reason: "params must be None".to_string(),
+        });
     }
 
     let liquid_stake_rates_history = LIQUID_STAKE_RATES.load(deps.storage, &ibc_denom)?;
@@ -172,7 +262,9 @@ pub fn get_latest_liquid_stake_rate(
             redemption_rate: response.redemption_rate,
             update_time: response.update_time,
         }),
-        None => Err(StdError::generic_err("liquid stake rate not found")),
+        None => Err(ContractError::InvalidQueryRequest {
+            reason: "liquid stake rate not found".to_string(),
+        }),
     }
 }
 
@@ -181,11 +273,11 @@ pub fn get_historical_liquid_stake_rates(
     ibc_denom: String,
     extra: Option<Binary>,
     limit: Option<u64>,
-) -> StdResult<RedemptionRates> {
+) -> Result<RedemptionRates, ContractError> {
     if extra.is_some() {
-        return Err(StdError::generic_err(
-            "invalid query request - params must be None",
-        ));
+        return Err(ContractError::InvalidQueryRequest {
+            reason: "params must be None".to_string(),
+        });
     }
 
     let liquid_stake_rates_history = LIQUID_STAKE_RATES.load(deps.storage, &ibc_denom)?;
@@ -219,6 +311,8 @@ mod tests {
             admin: Some("owner".to_string()),
             transfer_channel_i_d: "channel-0".to_string(),
             transfer_port_i_d: "transfer".to_string(),
+            deviation_count_limit: None,
+            deviation_threshold: None,
         };
         let info = mock_info(OWNER_ADDRESS, &coins(1000, "earth"));
 
@@ -230,7 +324,9 @@ mod tests {
                 attr("method", "instantiate"),
                 attr("owner", OWNER_ADDRESS.to_string()),
                 attr("transfer_channel_id", "channel-0".to_string()),
-                attr("transfer_port_id", "transfer".to_string())
+                attr("transfer_port_id", "transfer".to_string()),
+                attr("deviation_count_limit", "10".to_string()),
+                attr("deviation_threshold", "0.05".to_string()),
             ]
         );
 
@@ -238,6 +334,55 @@ mod tests {
         let res = query(deps.as_ref(), mock_env(), QueryMsg::Config {}).unwrap();
         let value: ConfigResponse = from_json(res).unwrap();
         assert_eq!("owner", value.owner);
+    }
+
+    #[test]
+    fn test_update_config() {
+        let (mut deps, env, info) = default_instantiate();
+
+        let msg = ExecuteMsg::UpdateConfig {
+            transfer_channel_i_d: Some("channel-1".to_string()),
+            transfer_port_i_d: Some("transfer".to_string()),
+            deviation_count_limit: Some(20),
+            deviation_threshold: Some(Decimal::percent(10)),
+        };
+
+        let res = execute(deps.as_mut(), env, info, msg).unwrap();
+        assert_eq!(
+            res.attributes,
+            vec![
+                attr("action", "update_config"),
+                attr("transfer_channel_id", "channel-1".to_string()),
+                attr("transfer_port_id", "transfer".to_string()),
+                attr("deviation_count_limit", "20".to_string()),
+                attr("deviation_threshold", "0.1".to_string()),
+            ]
+        );
+
+        // it worked, let's query the state
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::Config {}).unwrap();
+        let value: ConfigResponse = from_json(res).unwrap();
+        assert_eq!("creator", value.owner);
+    }
+
+    #[test]
+    fn test_unauthorized_update_config() {
+        let (mut deps, env, _info) = default_instantiate();
+
+        // unauthorized attempt
+        let info = mock_info("anyone", &coins(1000, "earth"));
+        let msg = ExecuteMsg::UpdateConfig {
+            transfer_channel_i_d: Some("channel-1".to_string()),
+            transfer_port_i_d: Some("transfer".to_string()),
+            deviation_count_limit: Some(20),
+            deviation_threshold: Some(Decimal::percent(10)),
+        };
+
+        let res = execute(deps.as_mut(), env, info, msg);
+        match res {
+            Err(ContractError::Unauthorized {}) => {}
+            _ => panic!("Must return unauthorized error"),
+        }
     }
 
     #[test]
@@ -298,14 +443,14 @@ mod tests {
         let stk_denom = "stk/somecoin1".to_string();
         let ibc_hash_denom = denom_trace_to_hash(&stk_denom, "transfer", "channel-0").unwrap();
 
-        let msg1 = get_execute_msg(default_bond_denom.clone(), stk_denom.clone(), "1", 1);
-        let msg2 = get_execute_msg(default_bond_denom.clone(), stk_denom.clone(), "2", 2);
-        let msg3 = get_execute_msg(default_bond_denom.clone(), stk_denom.clone(), "3", 2);
-        let msg4 = get_execute_msg(default_bond_denom.clone(), stk_denom.clone(), "4", 3);
+        let msg1 = get_execute_msg(default_bond_denom.clone(), stk_denom.clone(), "1.01", 1);
+        let msg2 = get_execute_msg(default_bond_denom.clone(), stk_denom.clone(), "1.02", 2);
+        let msg3 = get_execute_msg(default_bond_denom.clone(), stk_denom.clone(), "1.03", 2);
+        let msg4 = get_execute_msg(default_bond_denom.clone(), stk_denom.clone(), "1.04", 3);
 
-        let rr1 = get_test_liquid_stake_rate("1", 1);
-        let rr2 = get_test_liquid_stake_rate("3", 2);
-        let rr3 = get_test_liquid_stake_rate("4", 3);
+        let rr1 = get_test_liquid_stake_rate("1.01", 1);
+        let rr2 = get_test_liquid_stake_rate("1.03", 2);
+        let rr3 = get_test_liquid_stake_rate("1.04", 3);
 
         // Execute each message out of order, and with msg2 coming before msg3
         execute(deps.as_mut(), env.clone(), info.clone(), msg2).unwrap();
@@ -439,6 +584,8 @@ mod tests {
             admin: Some(OWNER_ADDRESS.to_string()),
             transfer_channel_i_d: "channel-0".to_string(),
             transfer_port_i_d: "transfer".to_string(),
+            deviation_count_limit: None,
+            deviation_threshold: None,
         };
         let _res = instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
 

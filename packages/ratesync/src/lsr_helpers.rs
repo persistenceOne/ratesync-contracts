@@ -1,7 +1,12 @@
-use cosmwasm_std::{Addr, Api, StdResult};
+use std::str::FromStr;
+
+use cosmwasm_std::{Addr, Api, Decimal, Deps, StdResult};
 use sha2::{Digest, Sha256};
 
-use crate::lsr_error::ContractError;
+use crate::{
+    lsr_error::ContractError,
+    lsr_state::{RedemptionRate, CONFIG, LIQUID_STAKE_RATES},
+};
 
 const CHANNEL_ID_PERFIX: &str = "channel";
 
@@ -43,6 +48,36 @@ pub fn validate_native_denom(denom: &str) -> Result<(), ContractError> {
     }
 
     Ok(())
+}
+
+pub fn validate_redemption_rate(deps: Deps, rr: RedemptionRate) -> Result<(), ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    let c_value_rates = LIQUID_STAKE_RATES
+        .load(deps.storage, &rr.denom)?
+        .get_latest_range(config.count_limit as usize);
+    let moving_average = calculate_average_redemption_rate(c_value_rates)?;
+    let deviation = moving_average.abs_diff(rr.redemption_rate);
+
+    if moving_average != Decimal::zero() && deviation > config.threshold {
+        return Err(ContractError::InvalidCValueDeviation { value: deviation });
+    }
+
+    Ok(())
+}
+
+fn calculate_average_redemption_rate(
+    redemption_rates: Vec<RedemptionRate>,
+) -> Result<Decimal, ContractError> {
+    let count = Decimal::from_str(&redemption_rates.len().to_string())?;
+
+    if count.is_zero() {
+        Ok(Decimal::zero())
+    } else {
+        let total_redemption_rate: Decimal =
+            redemption_rates.iter().map(|rr| rr.redemption_rate).sum();
+        Ok(total_redemption_rate / count)
+    }
 }
 
 // Validates that the channel ID is of the form `channel-N`

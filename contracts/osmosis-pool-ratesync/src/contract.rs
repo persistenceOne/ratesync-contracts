@@ -21,7 +21,7 @@ use crate::{
     error::ContractError,
     helpers::{convert_redemption_rate_to_scaling_factors, validate_pool_configuration},
     msg::{ExecuteMsg, InstantiateMsg, Pools, QueryMsg},
-    state::{AssetOrdering, Config, Pool, CONFIG, POOLS},
+    state::{Config, Pool, CONFIG, POOLS},
 };
 
 const CONTRACT_NAME: &str = "crates.io:osmosis-pool-ratesync";
@@ -67,15 +67,19 @@ pub fn execute(
             transfer_port_id,
             transfer_channel_id,
             asset_ordering,
-        } => execute_add_pool(
-            deps,
-            info,
-            pool_id,
-            stk_token_denom,
-            transfer_port_id,
-            transfer_channel_id,
-            asset_ordering,
-        ),
+        } => {
+            let pool = Pool {
+                pool_id,
+                stk_token_denom: stk_token_denom.clone(),
+                transfer_port_id: transfer_port_id.clone(),
+                transfer_channel_id: transfer_channel_id.clone(),
+                ibc_hash_stk_denom: "".to_string(),
+                asset_ordering: asset_ordering.clone(),
+                last_updated: 0,
+            };
+
+            execute_add_pool(deps, env, info, pool)
+        }
         ExecuteMsg::RemovePool { pool_id } => execute_remove_pool(deps, info, pool_id),
         ExecuteMsg::UpdateScalingFactor { pool_id } => {
             execute_update_scaling_factor(deps, env, pool_id)
@@ -90,10 +94,10 @@ pub fn execute_update_config(
     lsr_contract_address: String,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
-    ensure!(
-        info.sender == config.owner_address,
-        ContractError::Unauthorized {}
-    );
+
+    if info.sender != config.owner_address {
+        return Err(ContractError::Unauthorized {});
+    }
 
     let updated_config = Config {
         owner_address: deps.api.addr_validate(&owner_address)?,
@@ -110,12 +114,9 @@ pub fn execute_update_config(
 
 pub fn execute_add_pool(
     deps: DepsMut,
+    env: Env,
     info: MessageInfo,
-    pool_id: u64,
-    stk_token_denom: String,
-    transfer_port_id: String,
-    transfer_channel_id: String,
-    asset_ordering: AssetOrdering,
+    mut pool: Pool,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     ensure!(
@@ -123,10 +124,14 @@ pub fn execute_add_pool(
         ContractError::Unauthorized {}
     );
 
+    let pool_id = pool.pool_id;
+
+    // Ensure the pool does not already exist
     if POOLS.has(deps.storage, pool_id) {
         return Err(ContractError::PoolAlreadyExists { pool_id });
     }
 
+    // Query the pool from the pool manager
     let query_pool_resp = PoolmanagerQuerier::new(&deps.querier).pool(pool_id)?;
     let stableswap_pool: StableswapPool = query_pool_resp
         .pool
@@ -139,10 +144,24 @@ pub fn execute_add_pool(
             )
         })?;
 
+    // Ensure the pool's scaling factor controller is the contract
+    if stableswap_pool.scaling_factor_controller != env.contract.address {
+        return Err(ContractError::InvalidScalingFactorController {
+            pool_id,
+            controller: stableswap_pool.scaling_factor_controller,
+        });
+    }
+
+    let transfer_channel_id = pool.transfer_channel_id.clone();
+    let asset_ordering = pool.asset_ordering.clone();
+
     validate_channel_id(&transfer_channel_id.clone())?;
 
-    let ibc_hash_stk_denom =
-        denom_trace_to_hash(&stk_token_denom, &transfer_port_id, &transfer_channel_id)?;
+    let ibc_hash_stk_denom = denom_trace_to_hash(
+        &pool.stk_token_denom,
+        &pool.transfer_port_id,
+        &transfer_channel_id,
+    )?;
 
     validate_pool_configuration(
         stableswap_pool,
@@ -151,15 +170,7 @@ pub fn execute_add_pool(
         asset_ordering.clone(),
     )?;
 
-    let pool = Pool {
-        pool_id,
-        stk_token_denom: stk_token_denom.clone(),
-        transfer_port_id: transfer_port_id.clone(),
-        transfer_channel_id: transfer_channel_id.clone(),
-        ibc_hash_stk_denom: ibc_hash_stk_denom.clone(),
-        asset_ordering: asset_ordering.clone(),
-        last_updated: 0,
-    };
+    pool.ibc_hash_stk_denom = ibc_hash_stk_denom.clone();
     POOLS.save(deps.storage, pool_id, &pool)?;
 
     Ok(Response::new()
@@ -239,36 +250,6 @@ pub fn execute_update_scaling_factor(
         .add_attribute(
             "scaling_factors",
             format!("[{}, {}]", scaling_factors[0], scaling_factors[1]),
-        )
-        .add_message(adjust_factors_msg))
-}
-
-pub fn execute_sudo_adjust_scaling_factors(
-    deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    pool_id: u64,
-    scaling_factors: Vec<u64>,
-) -> Result<Response, ContractError> {
-    let config = CONFIG.load(deps.storage)?;
-    ensure!(
-        info.sender == config.owner_address,
-        ContractError::Unauthorized {}
-    );
-
-    let adjust_factors_msg: CosmosMsg = MsgStableSwapAdjustScalingFactors {
-        sender: env.contract.address.to_string(),
-        pool_id,
-        scaling_factors: scaling_factors.clone(),
-    }
-    .into();
-
-    Ok(Response::new()
-        .add_attribute("action", "sudo_adjust_scaling_factors")
-        .add_attribute("pool_id", pool_id.to_string())
-        .add_attribute(
-            "scaling_factors",
-            format!("[{},{}]", scaling_factors[0], scaling_factors[1]),
         )
         .add_message(adjust_factors_msg))
 }
@@ -429,6 +410,7 @@ mod tests {
             let stableswap_pool = StableswapPool {
                 id: pool_id,
                 pool_liquidity,
+                scaling_factor_controller: mock_env().contract.address.to_string(),
                 ..Default::default()
             };
 
@@ -693,6 +675,7 @@ mod tests {
             queried_id,
             StableswapPool {
                 id: misconfigured_pool_id,
+                scaling_factor_controller: env.contract.address.to_string(),
                 ..Default::default()
             },
         );
@@ -739,6 +722,7 @@ mod tests {
                         amount: "1000000".to_string(),
                     },
                 ],
+                scaling_factor_controller: env.contract.address.to_string(),
                 ..Default::default()
             },
         );
