@@ -39,10 +39,15 @@ pub enum ExecuteMsg {
         transfer_channel_i_d: Option<String>,
         /// Transfer Port ID
         transfer_port_i_d: Option<String>,
+    },
+    /// Set anomaly config for denom
+    SetAnomalyConfig {
+        /// stkToken denom
+        stk_denom: String,
         /// Deviation Count limit
-        deviation_count_limit: Option<u64>,
+        deviation_count_limit: u64,
         /// Deviation Threshold
-        deviation_threshold: Option<Decimal>,
+        deviation_threshold: Decimal,
     },
 }
 
@@ -52,6 +57,14 @@ pub enum QueryMsg {
     /// Get config
     #[returns(ConfigResponse)]
     Config {},
+
+    /// Returns the anomaly config for an stkToken
+    #[returns(AnomalyConfigResponse)]
+    AnomalyConfig {
+        /// The denom should be the ibc hash of an stkToken as it lives on the oracle chain
+        /// (e.g. ibc/{hash(transfer/channel-0/stkuatom)} on Osmosis)
+        denom: String,
+    },
 
     /// Returns the redemption rate of an stkToken
     #[returns(RedemptionRateResponse)]
@@ -86,6 +99,10 @@ pub struct ConfigResponse {
     pub transfer_channel_i_d: String,
     /// Transfer Port ID
     pub transfer_port_i_d: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, JsonSchema)]
+pub struct AnomalyConfigResponse {
     /// Deviation Count limit
     pub deviation_count_limit: u64,
     /// Deviation Threshold
@@ -98,7 +115,7 @@ pub struct RedemptionRateResponse {
     pub update_time: u64,
 }
 
-#[cw_serde]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct RedemptionRates {
     pub redemption_rates: Vec<RedemptionRate>,
 }

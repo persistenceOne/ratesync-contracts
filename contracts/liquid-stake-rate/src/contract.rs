@@ -11,7 +11,10 @@ use ratesync::{
         ConfigResponse, ExecuteMsg, InstantiateMsg, QueryMsg, RedemptionRateResponse,
         RedemptionRates,
     },
-    lsr_state::{Config, History, RedemptionRate, CONFIG, LIQUID_STAKE_RATES},
+    lsr_state::{
+        AnomalyConfig, Config, History, RedemptionRate, ANOMALY_CONFIG_BY_DENOM, CONFIG,
+        LIQUID_STAKE_RATES,
+    },
 };
 
 use ratesync::{
@@ -52,8 +55,6 @@ pub fn instantiate(
             owner: option_string_to_addr(deps.api, msg.admin, info.sender.clone())?,
             transfer_channel_i_d: msg.transfer_channel_i_d.clone(),
             transfer_port_i_d: msg.transfer_port_i_d.clone(),
-            count_limit,
-            threshold,
         },
     )?;
 
@@ -88,17 +89,21 @@ pub fn execute(
             c_value,
             controller_chain_time,
         ),
+
         ExecuteMsg::UpdateConfig {
             transfer_channel_i_d,
             transfer_port_i_d,
+        } => execute_update_config(deps, env, info, transfer_channel_i_d, transfer_port_i_d),
+
+        ExecuteMsg::SetAnomalyConfig {
+            stk_denom,
             deviation_count_limit,
             deviation_threshold,
-        } => execute_update_config(
+        } => execute_set_anomaly_config(
             deps,
             env,
             info,
-            transfer_channel_i_d,
-            transfer_port_i_d,
+            stk_denom,
             deviation_count_limit,
             deviation_threshold,
         ),
@@ -121,33 +126,46 @@ pub fn execute_add_liquid_stake_rate(
         return Err(ContractError::Unauthorized {});
     }
 
+    // Validate denom
     validate_native_denom(&default_bond_denom.clone())?;
 
+    // Convert stk_denom to ibc hash
     let stk_denom_ibc_hash = denom_trace_to_hash(
         &stk_denom,
         &config.transfer_port_i_d,
         &config.transfer_channel_i_d,
     )?;
 
-    let new_liquid_stake_rate = RedemptionRate {
+    // check if anomaly config exists, else set default
+    let anomaly_config =
+        match ANOMALY_CONFIG_BY_DENOM.may_load(deps.storage, &stk_denom_ibc_hash)? {
+            Some(config) => config,
+            None => AnomalyConfig::default(),
+        };
+    ANOMALY_CONFIG_BY_DENOM.save(deps.storage, &stk_denom_ibc_hash.clone(), &anomaly_config)?;
+
+    // Add liquid stake rate to historical state
+    let mut new_liquid_stake_rate = RedemptionRate {
         denom: stk_denom_ibc_hash.clone(),
         redemption_rate: c_value,
         update_time: controller_chain_time,
+        anomaly_detected: false,
     };
 
     let mut liquid_stake_rate_history =
         match LIQUID_STAKE_RATES.may_load(deps.storage, &stk_denom_ibc_hash.clone())? {
             Some(history) => {
-                validate_redemption_rate(deps.as_ref(), new_liquid_stake_rate.clone())?;
+                new_liquid_stake_rate.anomaly_detected =
+                    validate_redemption_rate(deps.as_ref(), c_value, stk_denom_ibc_hash.clone())?;
 
                 history
             }
             None => History::<RedemptionRate>::default(),
         };
-    liquid_stake_rate_history.add(new_liquid_stake_rate);
+    liquid_stake_rate_history.add(new_liquid_stake_rate.clone());
     LIQUID_STAKE_RATES.save(
         deps.storage,
-        &stk_denom_ibc_hash,
+        &stk_denom_ibc_hash.clone(),
         &liquid_stake_rate_history,
     )?;
 
@@ -157,7 +175,8 @@ pub fn execute_add_liquid_stake_rate(
         .add_attribute("stk_denom", stk_denom)
         .add_attribute("stk_denom_ibc_hash", stk_denom_ibc_hash)
         .add_attribute("c_value", c_value.to_string())
-        .add_attribute("controller_chain_time", controller_chain_time.to_string()))
+        .add_attribute("controller_chain_time", controller_chain_time.to_string())
+        .add_attribute("anomaly_detected", new_liquid_stake_rate.anomaly_detected.to_string()))
 }
 
 // Update config
@@ -167,8 +186,6 @@ pub fn execute_update_config(
     info: MessageInfo,
     transfer_channel_i_d: Option<String>,
     transfer_port_i_d: Option<String>,
-    deviation_count_limit: Option<u64>,
-    deviation_threshold: Option<Decimal>,
 ) -> Result<Response, ContractError> {
     let mut config = CONFIG.load(deps.storage)?;
 
@@ -185,14 +202,6 @@ pub fn execute_update_config(
         config.transfer_port_i_d = port_id;
     }
 
-    if let Some(limit) = deviation_count_limit {
-        config.count_limit = limit;
-    }
-
-    if let Some(threshold) = deviation_threshold {
-        config.threshold = threshold;
-    }
-
     CONFIG.save(deps.storage, &config)?;
 
     Ok(Response::new()
@@ -201,21 +210,53 @@ pub fn execute_update_config(
             "transfer_channel_id",
             transfer_channel_i_d.unwrap_or_default(),
         )
-        .add_attribute("transfer_port_id", transfer_port_i_d.unwrap_or_default())
-        .add_attribute(
-            "deviation_count_limit",
-            deviation_count_limit.unwrap_or_default().to_string(),
-        )
-        .add_attribute(
-            "deviation_threshold",
-            deviation_threshold.unwrap_or_default().to_string(),
-        ))
+        .add_attribute("transfer_port_id", transfer_port_i_d.unwrap_or_default()))
+}
+
+// Set anomaly config
+pub fn execute_set_anomaly_config(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    stk_denom: String,
+    deviation_count_limit: u64,
+    deviation_threshold: Decimal,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    if info.sender != config.owner {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let stk_denom_ibc_hash = denom_trace_to_hash(
+        &stk_denom,
+        &config.transfer_port_i_d,
+        &config.transfer_channel_i_d,
+    )?;
+
+    ANOMALY_CONFIG_BY_DENOM.save(
+        deps.storage,
+        &stk_denom_ibc_hash,
+        &AnomalyConfig {
+            count_limit: deviation_count_limit,
+            threshold: deviation_threshold,
+        },
+    )?;
+
+    Ok(Response::new()
+        .add_attribute("action", "set_anomaly_config")
+        .add_attribute("stk_denom", stk_denom)
+        .add_attribute("stk_denom_ibc_hash", stk_denom_ibc_hash)
+        .add_attribute("deviation_count_limit", deviation_count_limit.to_string())
+        .add_attribute("deviation_threshold", deviation_threshold.to_string()))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::Config {} => to_json_binary(&query_config(deps)?),
+
+        QueryMsg::AnomalyConfig { denom } => to_json_binary(&query_anomaly_config(deps, denom)?),
 
         QueryMsg::RedemptionRate { denom, params } => {
             to_json_binary(&get_latest_liquid_stake_rate(deps, denom, params)?)
@@ -239,9 +280,13 @@ fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
         owner: config.owner,
         transfer_channel_i_d: config.transfer_channel_i_d,
         transfer_port_i_d: config.transfer_port_i_d,
-        deviation_count_limit: config.count_limit,
-        deviation_threshold: config.threshold,
     })
+}
+
+fn query_anomaly_config(deps: Deps, denom: String) -> Result<AnomalyConfig, ContractError> {
+    let anomaly_config = ANOMALY_CONFIG_BY_DENOM.load(deps.storage, &denom)?;
+
+    Ok(anomaly_config)
 }
 
 pub fn get_latest_liquid_stake_rate(
@@ -343,8 +388,6 @@ mod tests {
         let msg = ExecuteMsg::UpdateConfig {
             transfer_channel_i_d: Some("channel-1".to_string()),
             transfer_port_i_d: Some("transfer".to_string()),
-            deviation_count_limit: Some(20),
-            deviation_threshold: Some(Decimal::percent(10)),
         };
 
         let res = execute(deps.as_mut(), env, info, msg).unwrap();
@@ -354,8 +397,6 @@ mod tests {
                 attr("action", "update_config"),
                 attr("transfer_channel_id", "channel-1".to_string()),
                 attr("transfer_port_id", "transfer".to_string()),
-                attr("deviation_count_limit", "20".to_string()),
-                attr("deviation_threshold", "0.1".to_string()),
             ]
         );
 
@@ -363,6 +404,46 @@ mod tests {
         let res = query(deps.as_ref(), mock_env(), QueryMsg::Config {}).unwrap();
         let value: ConfigResponse = from_json(res).unwrap();
         assert_eq!("creator", value.owner);
+    }
+
+    // set amnomaly config for denom
+    #[test]
+    fn test_set_anomaly_config() {
+        let (mut deps, env, info) = default_instantiate();
+
+        let msg = ExecuteMsg::SetAnomalyConfig {
+            stk_denom: "somecoin1".to_string(),
+            deviation_count_limit: 10,
+            deviation_threshold: Decimal::percent(5),
+        };
+
+        let expected_ibc_hash =
+            "ibc/2CC566890930B4BCBA686137D36CDEEFB221AE4726408D7DA0F9B2A40E9CA2AB".to_string();
+
+        let res = execute(deps.as_mut(), env, info, msg).unwrap();
+        assert_eq!(
+            res.attributes,
+            vec![
+                attr("action", "set_anomaly_config"),
+                attr("stk_denom", "somecoin1".to_string()),
+                attr("stk_denom_ibc_hash", expected_ibc_hash.clone()),
+                attr("deviation_count_limit", "10".to_string()),
+                attr("deviation_threshold", "0.05".to_string()),
+            ]
+        );
+
+        // it worked, let's query the state
+        let res = query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::AnomalyConfig {
+                denom: expected_ibc_hash,
+            },
+        )
+        .unwrap();
+        let value: AnomalyConfig = from_json(res).unwrap();
+        assert_eq!(10, value.count_limit);
+        assert_eq!(Decimal::percent(5), value.threshold);
     }
 
     #[test]
@@ -374,8 +455,19 @@ mod tests {
         let msg = ExecuteMsg::UpdateConfig {
             transfer_channel_i_d: Some("channel-1".to_string()),
             transfer_port_i_d: Some("transfer".to_string()),
-            deviation_count_limit: Some(20),
-            deviation_threshold: Some(Decimal::percent(10)),
+        };
+
+        let res = execute(deps.as_mut(), env.clone(), info.clone(), msg);
+        match res {
+            Err(ContractError::Unauthorized {}) => {}
+            _ => panic!("Must return unauthorized error"),
+        }
+
+        // unauthorized attempt for anomaly config
+        let msg = ExecuteMsg::SetAnomalyConfig {
+            stk_denom: "somecoin1".to_string(),
+            deviation_count_limit: 10,
+            deviation_threshold: Decimal::percent(5),
         };
 
         let res = execute(deps.as_mut(), env, info, msg);
@@ -570,6 +662,75 @@ mod tests {
         )
     }
 
+    #[test]
+    fn test_anomaly_detected() {
+        // Instantiate contract
+        let (mut deps, env, info) = default_instantiate();
+
+        let default_bond_denom = "somecoin1".to_string();
+        let stk_denom = "stk/somecoin1".to_string();
+        let ibc_hash_denom = denom_trace_to_hash(&stk_denom, "transfer", "channel-0").unwrap();
+
+        // add liquid stake rate
+        let msg = ExecuteMsg::LiquidStakeRate {
+            default_bond_denom: default_bond_denom.clone(),
+            stk_denom: stk_denom.clone(),
+            c_value: Decimal::percent(1),
+            controller_chain_time: 1,
+        };
+
+        let _res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+        // it worked, let's query the state
+        let res = query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::HistoricalRedemptionRates { denom: ibc_hash_denom.clone(), params: None, limit: None },
+        )
+        .unwrap();
+
+        let history_response: RedemptionRates = from_json(res).unwrap();
+        assert_eq!(1, history_response.redemption_rates.len());
+        assert_eq!(Decimal::percent(1), history_response.redemption_rates[0].redemption_rate);
+        assert_eq!(1, history_response.redemption_rates[0].update_time);
+        assert_eq!(false, history_response.redemption_rates[0].anomaly_detected);
+
+        // set anomaly config
+        set_anomaly_config(
+            &mut deps,
+            env.clone(),
+            info.clone(),
+            stk_denom.clone(),
+            1,
+            Decimal::percent(1),
+        );
+
+        // add liquid stake rate
+        let msg = ExecuteMsg::LiquidStakeRate {
+            default_bond_denom: default_bond_denom.clone(),
+            stk_denom: stk_denom.clone(),
+            c_value: Decimal::from_str("1.1").unwrap(),
+            controller_chain_time: 2,
+        };
+
+        let _res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+        // it worked, let's query the state
+        let res = query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::HistoricalRedemptionRates { denom: ibc_hash_denom.clone(), params: None, limit: None },
+        )
+        .unwrap();
+
+        let history_response: RedemptionRates = from_json(res).unwrap();
+        assert_eq!(2, history_response.redemption_rates.len());
+        assert_eq!(Decimal::from_str("1.1").unwrap(), history_response.redemption_rates[0].redemption_rate);
+        assert_eq!(2, history_response.redemption_rates[0].update_time);
+        assert_eq!(true, history_response.redemption_rates[0].anomaly_detected);
+    }
+
+
     // helper function to instantiate contract
     fn default_instantiate() -> (
         OwnedDeps<MockStorage, MockApi, MockQuerier, Empty>,
@@ -599,6 +760,7 @@ mod tests {
             denom: ibc_hash_denom.clone(),
             redemption_rate: Decimal::from_str(value).unwrap(),
             update_time: time,
+            anomaly_detected: false,
         }
     }
 
@@ -615,5 +777,23 @@ mod tests {
             c_value: Decimal::from_str(c_value).unwrap(),
             controller_chain_time,
         }
+    }
+
+    // helper function to set anomaly config for denom
+    fn set_anomaly_config(
+        deps: &mut OwnedDeps<MockStorage, MockApi, MockQuerier, Empty>,
+        env: Env,
+        info: MessageInfo,
+        stk_denom: String,
+        deviation_count_limit: u64,
+        deviation_threshold: Decimal,
+    ) {
+        let msg = ExecuteMsg::SetAnomalyConfig {
+            stk_denom,
+            deviation_count_limit,
+            deviation_threshold,
+        };
+
+        let _res = execute(deps.as_mut(), env, info, msg).unwrap();
     }
 }

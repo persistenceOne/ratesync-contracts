@@ -13,10 +13,6 @@ pub struct Config {
     pub transfer_channel_i_d: String,
     /// Transfer Port ID
     pub transfer_port_i_d: String,
-    /// Contract owner
-    pub count_limit: u64,
-    /// Allowed Deviation threshold
-    pub threshold: Decimal,
 }
 
 /// The RedemptionRate struct represents the c-value of an stkToken
@@ -28,6 +24,8 @@ pub struct RedemptionRate {
     pub redemption_rate: Decimal,
     /// The unix timestamp representing when the c-value was last updated
     pub update_time: u64,
+    /// anomaly detected
+    pub anomaly_detected: bool,
 }
 
 impl HasTime for RedemptionRate {
@@ -90,6 +88,27 @@ impl<T: HasTime + Clone> History<T> {
     }
 }
 
+#[cw_serde]
+pub struct AnomalyConfig {
+    /// Number of last rates to consider
+    pub count_limit: u64,
+    /// Allowed anomaly threshold
+    pub threshold: Decimal,
+}
+
+const ANOMALY_THRESHOLD: Decimal = Decimal::percent(5);
+
+impl Default for AnomalyConfig {
+    fn default() -> Self {
+        AnomalyConfig {
+            count_limit: HISTORY_ITEM_CAP,
+            threshold: ANOMALY_THRESHOLD,
+        }
+    }
+}
+
 pub const CONFIG: Item<Config> = Item::new("config");
 
 pub const LIQUID_STAKE_RATES: Map<&str, History<RedemptionRate>> = Map::new("liquid_stake_rate");
+
+pub const ANOMALY_CONFIG_BY_DENOM: Map<&str, AnomalyConfig> = Map::new("anomaly_config_by_denom");

@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     lsr_error::ContractError,
-    lsr_state::{RedemptionRate, CONFIG, LIQUID_STAKE_RATES},
+    lsr_state::{RedemptionRate, ANOMALY_CONFIG_BY_DENOM, LIQUID_STAKE_RATES},
 };
 
 const CHANNEL_ID_PERFIX: &str = "channel";
@@ -50,20 +50,25 @@ pub fn validate_native_denom(denom: &str) -> Result<(), ContractError> {
     Ok(())
 }
 
-pub fn validate_redemption_rate(deps: Deps, rr: RedemptionRate) -> Result<(), ContractError> {
-    let config = CONFIG.load(deps.storage)?;
+pub fn validate_redemption_rate(
+    deps: Deps,
+    redemption_rate: Decimal,
+    denom: String,
+) -> Result<bool, ContractError> {
+    let anomaly_config = ANOMALY_CONFIG_BY_DENOM.load(deps.storage, &denom)?;
 
     let c_value_rates = LIQUID_STAKE_RATES
-        .load(deps.storage, &rr.denom)?
-        .get_latest_range(config.count_limit as usize);
-    let moving_average = calculate_average_redemption_rate(c_value_rates)?;
-    let deviation = moving_average.abs_diff(rr.redemption_rate);
+        .load(deps.storage, &denom)?
+        .get_latest_range(anomaly_config.count_limit as usize);
 
-    if moving_average != Decimal::zero() && deviation > config.threshold {
-        return Err(ContractError::InvalidCValueDeviation { value: deviation });
+    let moving_average = calculate_average_redemption_rate(c_value_rates)?;
+    let deviation = moving_average.abs_diff(redemption_rate);
+
+    if moving_average != Decimal::zero() && deviation > anomaly_config.threshold {
+        return Ok(true);
     }
 
-    Ok(())
+    Ok(false)
 }
 
 fn calculate_average_redemption_rate(
