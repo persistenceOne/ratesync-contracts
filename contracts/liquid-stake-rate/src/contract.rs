@@ -176,7 +176,10 @@ pub fn execute_add_liquid_stake_rate(
         .add_attribute("stk_denom_ibc_hash", stk_denom_ibc_hash)
         .add_attribute("c_value", c_value.to_string())
         .add_attribute("controller_chain_time", controller_chain_time.to_string())
-        .add_attribute("anomaly_detected", new_liquid_stake_rate.anomaly_detected.to_string()))
+        .add_attribute(
+            "anomaly_detected",
+            new_liquid_stake_rate.anomaly_detected.to_string(),
+        ))
 }
 
 // Update config
@@ -685,13 +688,20 @@ mod tests {
         let res = query(
             deps.as_ref(),
             mock_env(),
-            QueryMsg::HistoricalRedemptionRates { denom: ibc_hash_denom.clone(), params: None, limit: None },
+            QueryMsg::HistoricalRedemptionRates {
+                denom: ibc_hash_denom.clone(),
+                params: None,
+                limit: None,
+            },
         )
         .unwrap();
 
         let history_response: RedemptionRates = from_json(res).unwrap();
         assert_eq!(1, history_response.redemption_rates.len());
-        assert_eq!(Decimal::percent(1), history_response.redemption_rates[0].redemption_rate);
+        assert_eq!(
+            Decimal::percent(1),
+            history_response.redemption_rates[0].redemption_rate
+        );
         assert_eq!(1, history_response.redemption_rates[0].update_time);
         assert_eq!(false, history_response.redemption_rates[0].anomaly_detected);
 
@@ -719,17 +729,23 @@ mod tests {
         let res = query(
             deps.as_ref(),
             mock_env(),
-            QueryMsg::HistoricalRedemptionRates { denom: ibc_hash_denom.clone(), params: None, limit: None },
+            QueryMsg::HistoricalRedemptionRates {
+                denom: ibc_hash_denom.clone(),
+                params: None,
+                limit: None,
+            },
         )
         .unwrap();
 
         let history_response: RedemptionRates = from_json(res).unwrap();
         assert_eq!(2, history_response.redemption_rates.len());
-        assert_eq!(Decimal::from_str("1.1").unwrap(), history_response.redemption_rates[0].redemption_rate);
+        assert_eq!(
+            Decimal::from_str("1.1").unwrap(),
+            history_response.redemption_rates[0].redemption_rate
+        );
         assert_eq!(2, history_response.redemption_rates[0].update_time);
         assert_eq!(true, history_response.redemption_rates[0].anomaly_detected);
     }
-
 
     // helper function to instantiate contract
     fn default_instantiate() -> (
