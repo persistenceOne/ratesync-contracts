@@ -1,6 +1,6 @@
 [package]
 name = "liquid-stake-rate"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["Nabarun Sarkar <nabsarkar@gmail.com>"]
 edition = "2021"
 
@@ -29,7 +29,7 @@ optimize = """docker run --rm -v "$(pwd)":/code \
 """
 
 [dependencies]
-ratesync = { path = "../../packages/ratesync", version = "0.1.0" }
+ratesync = { path = "../../packages/ratesync", version = "1.0.0" }
 
 cosmwasm-schema = "1.3.3"
 cosmwasm-std = "1.3.3"
