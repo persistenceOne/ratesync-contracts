@@ -5,18 +5,23 @@ use cosmwasm_std::{
     QueryRequest, Response, StdResult, WasmQuery,
 };
 use cw2::set_contract_version;
-use osmosis_std::types::osmosis::gamm::poolmodels::stableswap::v1beta1::{
-    MsgStableSwapAdjustScalingFactors, Pool as StableswapPool,
+use osmosis_std::types::osmosis::{
+    gamm::poolmodels::stableswap::v1beta1::{
+        MsgStableSwapAdjustScalingFactors, Pool as StableswapPool,
+    },
+    poolmanager::v1beta1::PoolmanagerQuerier,
 };
-use osmosis_std::types::osmosis::poolmanager::v1beta1::PoolmanagerQuerier;
 
-use ratesync::lsr_msg::{LiquidStakeRateResponse, QueryMsg as LiquidStakeRateQueryMsg};
+use ratesync::{
+    lsr_helpers::{denom_trace_to_hash, validate_channel_id},
+    lsr_msg::{QueryMsg as LiquidStakeRateQueryMsg, RedemptionRateResponse},
+};
 
 use crate::{
     error::ContractError,
     helpers::{convert_redemption_rate_to_scaling_factors, validate_pool_configuration},
     msg::{ExecuteMsg, InstantiateMsg, Pools, QueryMsg},
-    state::{AssetOrdering, Config, Pool, CONFIG, POOLS},
+    state::{Config, Pool, CONFIG, POOLS},
 };
 
 const CONTRACT_NAME: &str = "crates.io:osmosis-pool-ratesync";
@@ -58,25 +63,27 @@ pub fn execute(
         } => execute_update_config(deps, info, owner_address, lsr_contract_address),
         ExecuteMsg::AddPool {
             pool_id,
-            default_bond_denom,
             stk_token_denom,
+            transfer_port_id,
+            transfer_channel_id,
             asset_ordering,
-        } => execute_add_pool(
-            deps,
-            info,
-            pool_id,
-            default_bond_denom,
-            stk_token_denom,
-            asset_ordering,
-        ),
+        } => {
+            let pool = Pool {
+                pool_id,
+                stk_token_denom: stk_token_denom.clone(),
+                transfer_port_id: transfer_port_id.clone(),
+                transfer_channel_id: transfer_channel_id.clone(),
+                ibc_hash_stk_denom: "".to_string(),
+                asset_ordering: asset_ordering.clone(),
+                last_updated: 0,
+            };
+
+            execute_add_pool(deps, env, info, pool)
+        }
         ExecuteMsg::RemovePool { pool_id } => execute_remove_pool(deps, info, pool_id),
         ExecuteMsg::UpdateScalingFactor { pool_id } => {
             execute_update_scaling_factor(deps, env, pool_id)
         }
-        ExecuteMsg::SudoAdjustScalingFactors {
-            pool_id,
-            scaling_factors,
-        } => execute_sudo_adjust_scaling_factors(deps, env, info, pool_id, scaling_factors),
     }
 }
 
@@ -87,10 +94,10 @@ pub fn execute_update_config(
     lsr_contract_address: String,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
-    ensure!(
-        info.sender == config.owner_address,
-        ContractError::Unauthorized {}
-    );
+
+    if info.sender != config.owner_address {
+        return Err(ContractError::Unauthorized {});
+    }
 
     let updated_config = Config {
         owner_address: deps.api.addr_validate(&owner_address)?,
@@ -107,11 +114,9 @@ pub fn execute_update_config(
 
 pub fn execute_add_pool(
     deps: DepsMut,
+    env: Env,
     info: MessageInfo,
-    pool_id: u64,
-    default_bond_denom: String,
-    stk_token_denom: String,
-    asset_ordering: AssetOrdering,
+    mut pool: Pool,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     ensure!(
@@ -119,10 +124,14 @@ pub fn execute_add_pool(
         ContractError::Unauthorized {}
     );
 
+    let pool_id = pool.pool_id;
+
+    // Ensure the pool does not already exist
     if POOLS.has(deps.storage, pool_id) {
         return Err(ContractError::PoolAlreadyExists { pool_id });
     }
 
+    // Query the pool from the pool manager
     let query_pool_resp = PoolmanagerQuerier::new(&deps.querier).pool(pool_id)?;
     let stableswap_pool: StableswapPool = query_pool_resp
         .pool
@@ -135,27 +144,39 @@ pub fn execute_add_pool(
             )
         })?;
 
+    // Ensure the pool's scaling factor controller is the contract
+    if stableswap_pool.scaling_factor_controller != env.contract.address {
+        return Err(ContractError::InvalidScalingFactorController {
+            pool_id,
+            controller: stableswap_pool.scaling_factor_controller,
+        });
+    }
+
+    let transfer_channel_id = pool.transfer_channel_id.clone();
+    let asset_ordering = pool.asset_ordering.clone();
+
+    validate_channel_id(&transfer_channel_id.clone())?;
+
+    let ibc_hash_stk_denom = denom_trace_to_hash(
+        &pool.stk_token_denom,
+        &pool.transfer_port_id,
+        &transfer_channel_id,
+    )?;
+
     validate_pool_configuration(
-        deps.as_ref(),
         stableswap_pool,
         pool_id,
-        stk_token_denom.clone(),
+        ibc_hash_stk_denom.clone(),
         asset_ordering.clone(),
     )?;
 
-    let pool = Pool {
-        pool_id,
-        default_bond_denom: default_bond_denom.clone(),
-        stk_token_denom: stk_token_denom.clone(),
-        asset_ordering: asset_ordering.clone(),
-        last_updated: 0,
-    };
+    pool.ibc_hash_stk_denom = ibc_hash_stk_denom.clone();
     POOLS.save(deps.storage, pool_id, &pool)?;
 
     Ok(Response::new()
         .add_attribute("action", "add_pool")
         .add_attribute("pool_id", pool_id.to_string())
-        .add_attribute("pool_stk_token_denom", stk_token_denom)
+        .add_attribute("pool_stk_token_denom", ibc_hash_stk_denom)
         .add_attribute("pool_asset_ordering", asset_ordering.to_string()))
 }
 
@@ -194,22 +215,21 @@ pub fn execute_update_scaling_factor(
 
     let redemption_rate_query_msg = QueryRequest::Wasm(WasmQuery::Smart {
         contract_addr: lsr_contract_address.to_string(),
-        msg: to_json_binary(&LiquidStakeRateQueryMsg::LiquidStakeRate {
-            default_bond_denom: pool.default_bond_denom.clone(),
-            stk_denom: pool.stk_token_denom.clone(),
+        msg: to_json_binary(&LiquidStakeRateQueryMsg::RedemptionRate {
+            denom: pool.ibc_hash_stk_denom.clone(),
+            params: None,
         })?,
     });
 
-    let redemption_rate_response: LiquidStakeRateResponse = deps
+    let redemption_rate_response: RedemptionRateResponse = deps
         .querier
         .query(&redemption_rate_query_msg)
         .map_err(|err| ContractError::UnableToQueryRedemptionRate {
-            default_bond_denom: pool.default_bond_denom.clone(),
-            stk_denom: pool.stk_token_denom.clone(),
+            stk_denom: pool.ibc_hash_stk_denom.clone(),
             error: err.to_string(),
         })?;
 
-    let redemption_rate = redemption_rate_response.c_value;
+    let redemption_rate = redemption_rate_response.redemption_rate;
     let scaling_factors =
         convert_redemption_rate_to_scaling_factors(redemption_rate, pool.asset_ordering.clone());
 
@@ -230,36 +250,6 @@ pub fn execute_update_scaling_factor(
         .add_attribute(
             "scaling_factors",
             format!("[{}, {}]", scaling_factors[0], scaling_factors[1]),
-        )
-        .add_message(adjust_factors_msg))
-}
-
-pub fn execute_sudo_adjust_scaling_factors(
-    deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    pool_id: u64,
-    scaling_factors: Vec<u64>,
-) -> Result<Response, ContractError> {
-    let config = CONFIG.load(deps.storage)?;
-    ensure!(
-        info.sender == config.owner_address,
-        ContractError::Unauthorized {}
-    );
-
-    let adjust_factors_msg: CosmosMsg = MsgStableSwapAdjustScalingFactors {
-        sender: env.contract.address.to_string(),
-        pool_id,
-        scaling_factors: scaling_factors.clone(),
-    }
-    .into();
-
-    Ok(Response::new()
-        .add_attribute("action", "sudo_adjust_scaling_factors")
-        .add_attribute("pool_id", pool_id.to_string())
-        .add_attribute(
-            "scaling_factors",
-            format!("[{},{}]", scaling_factors[0], scaling_factors[1]),
         )
         .add_message(adjust_factors_msg))
 }
@@ -298,9 +288,6 @@ mod tests {
         WasmQuery,
     };
     use osmosis_std::types::cosmos::base::v1beta1::Coin;
-    use osmosis_std::types::ibc::applications::transfer::v1::{
-        DenomTrace, QueryDenomTraceRequest, QueryDenomTraceResponse,
-    };
     use osmosis_std::types::osmosis::gamm::poolmodels::stableswap::v1beta1::{
         MsgStableSwapAdjustScalingFactors, Pool as StableswapPool,
     };
@@ -309,7 +296,6 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use crate::contract::{execute, instantiate, query};
-    use crate::helpers::DENOM_TRACE_QUERY_TYPE;
     use crate::state::{AssetOrdering, Config, Pool};
     use crate::ContractError;
 
@@ -320,9 +306,8 @@ mod tests {
 
     pub struct WasmMockQuerier {
         base_querier: MockQuerier<Empty>,
-        lsr_redemption_rates: HashMap<String, LiquidStakeRateResponse>,
+        lsr_redemption_rates: HashMap<String, RedemptionRateResponse>,
         pools: HashMap<u64, PoolQueryResponse>,
-        denom_trace: HashMap<String, QueryDenomTraceResponse>,
     }
 
     // Custom Osmosis pool query response to get avoid Any proto type
@@ -353,7 +338,6 @@ mod tests {
                 base_querier: MockQuerier::new(&[]),
                 lsr_redemption_rates: HashMap::new(),
                 pools: HashMap::new(),
-                denom_trace: HashMap::new(),
             }
         }
 
@@ -364,8 +348,8 @@ mod tests {
                 QueryRequest::Wasm(WasmQuery::Smart { contract_addr, msg }) => {
                     if contract_addr == LSR_CONTRACT_ADDRESS {
                         match from_json(msg).unwrap() {
-                            LiquidStakeRateQueryMsg::LiquidStakeRate { stk_denom, .. } => {
-                                match self.lsr_redemption_rates.get(&stk_denom) {
+                            LiquidStakeRateQueryMsg::RedemptionRate { denom, .. } => {
+                                match self.lsr_redemption_rates.get(&denom) {
                                     Some(resp) => SystemResult::Ok(to_json_binary(&resp).into()),
                                     None => SystemResult::Err(SystemError::Unknown {}),
                                 }
@@ -378,15 +362,8 @@ mod tests {
                 }
                 QueryRequest::Stargate { path, data } => {
                     if path == OSMOSIS_POOL_QUERY_TYPE {
-                        let pool_request = PoolRequest::decode(data.as_slice()).unwrap();
+                        let pool_request: PoolRequest = Message::decode(data.as_slice()).unwrap();
                         match self.pools.get(&pool_request.pool_id) {
-                            Some(resp) => SystemResult::Ok(to_json_binary(&resp).into()),
-                            None => SystemResult::Err(SystemError::Unknown {}),
-                        }
-                    } else if path == DENOM_TRACE_QUERY_TYPE {
-                        let query_denom_trace_request =
-                            QueryDenomTraceRequest::decode(data.as_slice()).unwrap();
-                        match self.denom_trace.get(&query_denom_trace_request.hash) {
                             Some(resp) => SystemResult::Ok(to_json_binary(&resp).into()),
                             None => SystemResult::Err(SystemError::Unknown {}),
                         }
@@ -403,9 +380,9 @@ mod tests {
         pub fn mock_lsr_redemption_rate(&mut self, denom: String, c_value: Decimal) {
             self.lsr_redemption_rates.insert(
                 denom,
-                LiquidStakeRateResponse {
-                    c_value,
-                    last_updated: 1,
+                RedemptionRateResponse {
+                    redemption_rate: c_value,
+                    update_time: 1,
                 },
             );
         }
@@ -415,10 +392,10 @@ mod tests {
         pub fn mock_stableswap_pool(&mut self, pool_id: u64, pool: &Pool) {
             let pool_assets = match pool.asset_ordering {
                 AssetOrdering::StkTokenFirst => {
-                    vec![pool.stk_token_denom.clone(), "native_denom".to_string()]
+                    vec![pool.ibc_hash_stk_denom.clone(), "native_denom".to_string()]
                 }
                 AssetOrdering::NativeTokenFirst => {
-                    vec!["native_denom".to_string(), pool.stk_token_denom.clone()]
+                    vec!["native_denom".to_string(), pool.ibc_hash_stk_denom.clone()]
                 }
             };
 
@@ -433,6 +410,7 @@ mod tests {
             let stableswap_pool = StableswapPool {
                 id: pool_id,
                 pool_liquidity,
+                scaling_factor_controller: mock_env().contract.address.to_string(),
                 ..Default::default()
             };
 
@@ -447,19 +425,6 @@ mod tests {
         // Helper function for if we want to explicitly set a pool that's misconfigured
         pub fn mock_invalid_stableswap_pool(&mut self, pool_id: u64, pool: StableswapPool) {
             self.pools.insert(pool_id, PoolQueryResponse { pool });
-        }
-
-        // Helper function to mock a denom trace query response
-        pub fn mock_denom_trace(&mut self, ibc_hash: String) {
-            self.denom_trace.insert(
-                ibc_hash.clone(),
-                QueryDenomTraceResponse {
-                    denom_trace: Some(DenomTrace {
-                        path: "transfer/channel-0".to_string(),
-                        base_denom: ibc_hash.split("/").last().unwrap().to_string(),
-                    }),
-                },
-            );
         }
     }
 
@@ -502,14 +467,19 @@ mod tests {
     // Helper function to create a test Pool object
     fn get_test_pool(
         pool_id: u64,
-        default_bond_denom: &str,
         stk_token_denom: &str,
+        transfer_port_id: &str,
+        transfer_channel_id: &str,
         asset_ordering: AssetOrdering,
     ) -> Pool {
+        let ibc_hash_stk_denom =
+            denom_trace_to_hash(stk_token_denom, transfer_port_id, transfer_channel_id).unwrap();
         Pool {
             pool_id,
-            default_bond_denom: default_bond_denom.to_string(),
             stk_token_denom: stk_token_denom.to_string(),
+            transfer_port_id: transfer_port_id.to_string(),
+            transfer_channel_id: transfer_channel_id.to_string(),
+            ibc_hash_stk_denom: ibc_hash_stk_denom.to_string(),
             asset_ordering,
             last_updated: 0,
         }
@@ -519,8 +489,9 @@ mod tests {
     fn get_add_pool_msg(pool_id: u64, pool: Pool) -> crate::msg::ExecuteMsg {
         ExecuteMsg::AddPool {
             pool_id,
-            default_bond_denom: pool.default_bond_denom,
             stk_token_denom: pool.stk_token_denom,
+            transfer_port_id: "transfer".to_string(),
+            transfer_channel_id: "channel-0".to_string(),
             asset_ordering: pool.asset_ordering,
         }
     }
@@ -582,19 +553,32 @@ mod tests {
         let (mut deps, env, info) = default_instantiate();
 
         // Create 3 dummy pools
-        let pool1 = get_test_pool(1, "A", "stkA", AssetOrdering::StkTokenFirst);
-        let pool2 = get_test_pool(2, "B", "stB", AssetOrdering::NativeTokenFirst);
-        let pool3 = get_test_pool(3, "C", "stC", AssetOrdering::StkTokenFirst);
+        let pool1 = get_test_pool(
+            1,
+            "stkA",
+            "transfer",
+            "channel-0",
+            AssetOrdering::StkTokenFirst,
+        );
+        let pool2 = get_test_pool(
+            2,
+            "stB",
+            "transfer",
+            "channel-0",
+            AssetOrdering::NativeTokenFirst,
+        );
+        let pool3 = get_test_pool(
+            3,
+            "stC",
+            "transfer",
+            "channel-0",
+            AssetOrdering::StkTokenFirst,
+        );
 
         // Mock each pool in the querier
         deps.querier.mock_stableswap_pool(1, &pool1);
         deps.querier.mock_stableswap_pool(2, &pool2);
         deps.querier.mock_stableswap_pool(3, &pool3);
-
-        // Mock the denom trace query response
-        deps.querier.mock_denom_trace("stkA".to_string());
-        deps.querier.mock_denom_trace("stB".to_string());
-        deps.querier.mock_denom_trace("stC".to_string());
 
         // Add each pool, and confirm the attributes and pool-query for each
         for pool in vec![pool1.clone(), pool2.clone(), pool3.clone()] {
@@ -606,7 +590,7 @@ mod tests {
                 vec![
                     attr("action", "add_pool"),
                     attr("pool_id", pool.pool_id.to_string()),
-                    attr("pool_stk_token_denom", pool.stk_token_denom.clone()),
+                    attr("pool_stk_token_denom", pool.ibc_hash_stk_denom.clone()),
                     attr("pool_asset_ordering", pool.asset_ordering.to_string()),
                 ]
             );
@@ -657,8 +641,9 @@ mod tests {
         // Try to add pool 1 again, it should fail
         let add_duplicate_pool_msg = ExecuteMsg::AddPool {
             pool_id: 1,
-            default_bond_denom: "".to_string(),
             stk_token_denom: "".to_string(),
+            transfer_port_id: "".to_string(),
+            transfer_channel_id: "".to_string(),
             asset_ordering: AssetOrdering::StkTokenFirst,
         };
         let add_duplicate_pool_resp = execute(deps.as_mut(), env, info, add_duplicate_pool_msg);
@@ -678,8 +663,9 @@ mod tests {
         // Create a pool configuration and message
         let pool = get_test_pool(
             queried_id,
-            "token",
             "stk_token",
+            "transfer",
+            "channel-0",
             AssetOrdering::StkTokenFirst,
         );
         let add_msg = get_add_pool_msg(queried_id, pool.clone());
@@ -689,6 +675,7 @@ mod tests {
             queried_id,
             StableswapPool {
                 id: misconfigured_pool_id,
+                scaling_factor_controller: env.contract.address.to_string(),
                 ..Default::default()
             },
         );
@@ -707,12 +694,16 @@ mod tests {
     fn test_add_misconfigured_pool_number_of_assets() {
         let (mut deps, env, info) = default_instantiate();
 
-        // Create a pool configuration and message
         let pool_id = 1;
-        let pool = get_test_pool(pool_id, "token", "stk_token", AssetOrdering::StkTokenFirst);
+        let pool = get_test_pool(
+            pool_id,
+            "stk_token",
+            "transfer",
+            "channel-0",
+            AssetOrdering::StkTokenFirst,
+        );
         let add_msg = get_add_pool_msg(pool_id, pool.clone());
 
-        // Mock out the query response so that the returned pool has a more than 2 assets
         deps.querier.mock_invalid_stableswap_pool(
             pool_id,
             StableswapPool {
@@ -731,11 +722,11 @@ mod tests {
                         amount: "1000000".to_string(),
                     },
                 ],
+                scaling_factor_controller: env.contract.address.to_string(),
                 ..Default::default()
             },
         );
 
-        // Attempt to add the pool, it should error since there are more than two assets
         let resp = execute(deps.as_mut(), env.clone(), info.clone(), add_msg);
         assert_eq!(
             resp,
@@ -747,80 +738,69 @@ mod tests {
     fn test_add_misconfigured_pool_asset_ordering() {
         let (mut deps, env, info) = default_instantiate();
 
-        // Create two pools, one with stToken first, and the other with the stToken second
-        let pool1 = get_test_pool(1, "token", "stk_token", AssetOrdering::StkTokenFirst);
-        let pool2 = get_test_pool(2, "token", "stk_token", AssetOrdering::NativeTokenFirst);
+        let pool1 = get_test_pool(
+            1,
+            "stk_token",
+            "transfer",
+            "channel-0",
+            AssetOrdering::StkTokenFirst,
+        );
+        let pool2 = get_test_pool(
+            2,
+            "stk_token",
+            "transfer",
+            "channel-0",
+            AssetOrdering::NativeTokenFirst,
+        );
 
-        // Mock those two pools out in the query response
         deps.querier.mock_stableswap_pool(1, &pool1);
         deps.querier.mock_stableswap_pool(2, &pool2);
 
-        // Create the add messages, but swap the pool IDs (i.e. add_msg1 adds pool ID 2)
         let add_msg1 = get_add_pool_msg(2, pool1.clone());
         let add_msg2 = get_add_pool_msg(1, pool2.clone());
 
-        // Attempt to add these two pools, they should both fail since the asset ordering is incorrect
         let add_resp1 = execute(deps.as_mut(), env.clone(), info.clone(), add_msg1);
-        assert_eq!(
-            add_resp1,
-            Err(StdError::generic_err("Querier system error: Unknown system error").into())
-        );
+        assert_eq!(add_resp1, Err(ContractError::InvalidPoolAssetOrdering {}));
 
         let add_resp2 = execute(deps.as_mut(), env.clone(), info.clone(), add_msg2);
-        assert_eq!(
-            add_resp2,
-            Err(StdError::generic_err("Querier system error: Unknown system error").into())
-        );
+        assert_eq!(add_resp2, Err(ContractError::InvalidPoolAssetOrdering {}));
     }
 
     #[test]
     fn test_unauthorized() {
         let (mut deps, env, _) = default_instantiate();
 
-        // Create info with non-admin sender
         let invalid_info: MessageInfo = mock_info("not_admin", &[]);
 
-        // Attempt to add the pool with a non-admin address
         let pool_id = 1;
-        let pool = get_test_pool(pool_id, "A", "stkA", AssetOrdering::StkTokenFirst);
+        let pool = get_test_pool(
+            pool_id,
+            "stkA",
+            "transfer",
+            "channel-0",
+            AssetOrdering::StkTokenFirst,
+        );
         let add_msg = get_add_pool_msg(pool_id, pool);
         let add_resp = execute(deps.as_mut(), env.clone(), invalid_info.clone(), add_msg);
 
         assert_eq!(add_resp, Err(ContractError::Unauthorized {}));
 
-        // Attempt to remove a pool with a non-admin address
         let remove_msg = ExecuteMsg::RemovePool { pool_id: 1 };
         let remove_resp = execute(deps.as_mut(), env.clone(), invalid_info.clone(), remove_msg);
 
         assert_eq!(remove_resp, Err(ContractError::Unauthorized {}));
-
-        // Attempt to update the scaling factor of a pool with a non-admin address
-        let adjust_msg = ExecuteMsg::SudoAdjustScalingFactors {
-            pool_id: 1,
-            scaling_factors: vec![1, 1],
-        };
-        let adjust_resp = execute(deps.as_mut(), env, invalid_info, adjust_msg);
-
-        assert_eq!(adjust_resp, Err(ContractError::Unauthorized {}));
     }
 
     #[test]
     fn test_update_scaling_factor() {
         let pool_id = 2;
-        let default_bond_denom = "uosmo";
-        let stk_token_denom = "ibc/stk_uosmo";
-        let stk_token_base_denom = "stk_uosmo";
+        let stk_token_denom = "stk/uosmo";
         let asset_ordering = AssetOrdering::StkTokenFirst;
         let pool = get_test_pool(
             pool_id,
-            default_bond_denom,
             stk_token_denom,
-            asset_ordering.clone(),
-        );
-        let add_pool = get_test_pool(
-            pool_id,
-            default_bond_denom,
-            stk_token_base_denom,
+            "transfer",
+            "channel-0",
             asset_ordering,
         );
 
@@ -828,28 +808,20 @@ mod tests {
         let redemption_rate = Decimal::from_str("1.2").unwrap();
         let expected_scaling_factors = vec![100000, 120000];
 
-        // Mock out the block time and the oracle query response
         let (mut deps, mut env, info) = default_instantiate();
         env.block.time = Timestamp::from_seconds(block_time);
         deps.querier
-            .mock_lsr_redemption_rate(stk_token_base_denom.to_string(), redemption_rate);
+            .mock_lsr_redemption_rate(pool.ibc_hash_stk_denom.to_string(), redemption_rate);
 
-        // Mock out the stableswap pool on Osmosis
         deps.querier.mock_stableswap_pool(pool_id, &pool);
 
-        // Mock out the denom trace query response
-        deps.querier.mock_denom_trace(stk_token_denom.to_string());
-
-        // Add a pool
-        let add_pool_msg = get_add_pool_msg(pool_id, add_pool);
+        let add_pool_msg = get_add_pool_msg(pool_id, pool);
         execute(deps.as_mut(), env.clone(), info.clone(), add_pool_msg).unwrap();
 
-        // Update the scaling factor
         let update_msg = ExecuteMsg::UpdateScalingFactor { pool_id: 2 };
         let update_pool_resp =
             execute(deps.as_mut(), env.clone(), info.clone(), update_msg).unwrap();
 
-        // Confrim attributes
         assert_eq!(
             update_pool_resp.attributes,
             vec![
@@ -860,7 +832,6 @@ mod tests {
             ]
         );
 
-        // Confirm pool was updated with the current block time
         let query_pool_msg = QueryMsg::Pool { pool_id: 2 };
         let query_pool_resp = query(deps.as_ref(), env.clone(), query_pool_msg).unwrap();
 
@@ -873,7 +844,6 @@ mod tests {
 
         assert_eq!(queried_pool, expected_pool);
 
-        // Confirm the osmosis tx was appended to the message response
         let expected_update_msg: CosmosMsg = MsgStableSwapAdjustScalingFactors {
             sender: env.contract.address.to_string(),
             pool_id: 2,
@@ -884,44 +854,11 @@ mod tests {
         assert_eq!(update_pool_resp.messages.len(), 1);
         assert_eq!(update_pool_resp.messages[0].msg, expected_update_msg);
 
-        // Attempt to update a non-existent pool, it should error
         let update_msg = ExecuteMsg::UpdateScalingFactor { pool_id: 1 };
         let update_pool_resp = execute(deps.as_mut(), env.clone(), info, update_msg);
         assert_eq!(
             update_pool_resp,
             Err(ContractError::PoolNotFound { pool_id: 1 })
         );
-    }
-
-    #[test]
-    fn test_sudo_adjust_scaling_factor() {
-        let (mut deps, env, info) = default_instantiate();
-
-        // Submit adjust scaling factor message
-        let adjust_msg = ExecuteMsg::SudoAdjustScalingFactors {
-            pool_id: 2,
-            scaling_factors: vec![1, 1],
-        };
-        let adjust_resp = execute(deps.as_mut(), env.clone(), info, adjust_msg).unwrap();
-
-        assert_eq!(
-            adjust_resp.attributes,
-            vec![
-                attr("action", "sudo_adjust_scaling_factors"),
-                attr("pool_id", "2"),
-                attr("scaling_factors", "[1,1]"),
-            ]
-        );
-
-        // Confirm the osmosis tx was appended to the message response
-        let expected_adjust_msg: CosmosMsg = MsgStableSwapAdjustScalingFactors {
-            sender: env.contract.address.to_string(),
-            pool_id: 2,
-            scaling_factors: vec![1, 1],
-        }
-        .into();
-
-        assert_eq!(adjust_resp.messages.len(), 1);
-        assert_eq!(adjust_resp.messages[0].msg, expected_adjust_msg);
     }
 }

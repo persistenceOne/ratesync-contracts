@@ -19,10 +19,12 @@ pub enum ExecuteMsg {
     AddPool {
         /// Pool ID of the Osmosis pool
         pool_id: u64,
-        /// The denom of the native token
-        default_bond_denom: String,
         /// The denom of the stkToken as it lives on Osmosis
         stk_token_denom: String,
+        /// The transfer port id
+        transfer_port_id: String,
+        /// The transfer channel id
+        transfer_channel_id: String,
         /// The ordering of the stkToken vs nativeToken assets in the Osmosis pool,
         asset_ordering: AssetOrdering,
     },
@@ -33,11 +35,6 @@ pub enum ExecuteMsg {
     UpdateScalingFactor {
         pool_id: u64,
     },
-
-    SudoAdjustScalingFactors {
-        pool_id: u64,
-        scaling_factors: Vec<u64>,
-    },
 }
 
 #[cw_serde]
@@ -47,7 +44,7 @@ pub enum QueryMsg {
     #[returns(crate::state::Config)]
     Config {},
 
-    /// Returns a the configuration for a specific stToken stableswap pool
+    /// Returns a the configuration for a specific stkToken stableswap pool
     #[returns(crate::state::Pool)]
     Pool { pool_id: u64 },
 
