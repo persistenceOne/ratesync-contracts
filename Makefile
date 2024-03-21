@@ -59,6 +59,16 @@ instantiate-contract:
 	@echo "Instantiating contract..."
 	@bash scripts/testnet/instantiate_contract.sh
 
+.PHONY: instantiate-lsr-contract
+instantiate-lsr-contract:
+	@echo "Instantiating LSR contract..."
+	@bash scripts/testnet/instantiate_lsr_contract.sh
+
+.PHONY:exec-lsr
+exec-lsr:
+	@echo "Executing LSR contract..."
+	@bash scripts/testnet/exec_lsr.sh
+
 .PHONY: add-pool
 add-pool:
 	@echo "Adding pool..."
@@ -73,3 +83,21 @@ remove-pool:
 query-all-pools:
 	@echo "Querying all pools..."
 	@bash scripts/testnet/query_all_pools.sh
+
+.PHONY: query-wasm-code
+query-wasm-code:
+	@echo "Querying wasm code..."
+	@bash scripts/testnet/query_wasm_code.sh
+
+.PHONY: store-contracts-proposals-testnet
+store-contracts-proposals-testnet:
+	@echo "Raising proposals to testnet..."
+	@bash scripts/testnet/store_contract_proposals.sh
+
+################# mainnet #################
+
+.PHONY: store-contracts-proposals
+store-contracts-proposals:
+	@echo "Raising proposals to mainnet..."
+	@bash scripts/mainnet/store_contract_proposals.sh
+

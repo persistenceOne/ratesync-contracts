@@ -2,6 +2,9 @@ use cosmwasm_std::Decimal;
 
 use crate::{state::AssetOrdering, ContractError};
 use osmosis_std::types::osmosis::gamm::poolmodels::stableswap::v1beta1::Pool as StableswapPool;
+use sha2::{Digest, Sha256};
+
+const CHANNEL_ID_PERFIX: &str = "channel";
 
 pub fn convert_redemption_rate_to_scaling_factors(
     redemption_rate: Decimal,
@@ -41,6 +44,54 @@ pub fn validate_pool_configuration(
     }
 
     Ok(())
+}
+
+// Validates that the channel ID is of the form `channel-N`
+pub fn validate_channel_id(channel_id: &str) -> Result<(), ContractError> {
+    let Some((prefix, id)) = channel_id.split_once('-') else {
+        return Err(ContractError::InvalidChannelID {
+            channel_id: channel_id.to_string(),
+        });
+    };
+
+    if prefix != CHANNEL_ID_PERFIX {
+        return Err(ContractError::InvalidChannelID {
+            channel_id: channel_id.to_string(),
+        });
+    }
+
+    if id.parse::<u64>().is_err() {
+        return Err(ContractError::InvalidChannelID {
+            channel_id: channel_id.to_string(),
+        });
+    }
+
+    Ok(())
+}
+
+// Given a base denom and channelID, returns the IBC denom hash
+// E.g. base_denom: uosmo, channel_id: channel-0 => ibc/{hash(transfer/channel-0/uosmo)}
+// Note: This function only supports ibc denom's that originated on the controller chain
+pub fn denom_trace_to_hash(
+    base_denom: &str,
+    transfer_port_id: &str,
+    channel_id: &str,
+) -> Result<String, ContractError> {
+    if base_denom.starts_with("ibc/") {
+        return Err(ContractError::InvalidRedemptionRateDenom {
+            denom: base_denom.to_string(),
+        });
+    }
+
+    let denom_trace = format!("{transfer_port_id}/{channel_id}/{base_denom}");
+
+    let mut hasher = Sha256::new();
+    hasher.update(denom_trace.as_bytes());
+    let result = hasher.finalize();
+    let hash = hex::encode(result);
+
+    let ibc_hash = format!("ibc/{}", hash.to_uppercase());
+    Ok(ibc_hash)
 }
 
 #[cfg(test)]

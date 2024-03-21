@@ -1,5 +1,6 @@
 use crate::state::Pool;
 use cosmwasm_schema::{cw_serde, QueryResponses};
+use cosmwasm_std::{Binary, Decimal};
 
 use crate::state::AssetOrdering;
 
@@ -56,4 +57,22 @@ pub enum QueryMsg {
 #[cw_serde]
 pub struct Pools {
     pub pools: Vec<Pool>,
+}
+
+/// RedemptionRate query as defined in the LiquidStakeRate contract
+#[cw_serde]
+#[derive(QueryResponses)]
+pub enum LiquidStakeRateQueryMsg {
+    #[returns(RedemptionRateResponse)]
+    RedemptionRate {
+        denom: String,
+        params: Option<Binary>,
+    },
+}
+
+/// Response from LiquidStakeRate contract redemption rate query
+#[cw_serde]
+pub struct RedemptionRateResponse {
+    pub redemption_rate: Decimal,
+    pub update_time: u64,
 }

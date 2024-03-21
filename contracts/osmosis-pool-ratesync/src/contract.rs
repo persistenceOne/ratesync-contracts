@@ -12,15 +12,16 @@ use osmosis_std::types::osmosis::{
     poolmanager::v1beta1::PoolmanagerQuerier,
 };
 
-use ratesync::{
-    lsr_helpers::{denom_trace_to_hash, validate_channel_id},
-    lsr_msg::{QueryMsg as LiquidStakeRateQueryMsg, RedemptionRateResponse},
-};
-
 use crate::{
     error::ContractError,
-    helpers::{convert_redemption_rate_to_scaling_factors, validate_pool_configuration},
-    msg::{ExecuteMsg, InstantiateMsg, Pools, QueryMsg},
+    helpers::{
+        convert_redemption_rate_to_scaling_factors, denom_trace_to_hash, validate_channel_id,
+        validate_pool_configuration,
+    },
+    msg::{
+        ExecuteMsg, InstantiateMsg, LiquidStakeRateQueryMsg, Pools, QueryMsg,
+        RedemptionRateResponse,
+    },
     state::{Config, Pool, CONFIG, POOLS},
 };
 
@@ -354,7 +355,6 @@ mod tests {
                                     None => SystemResult::Err(SystemError::Unknown {}),
                                 }
                             }
-                            _ => panic!("Mocked query not supported for LSR contract"),
                         }
                     } else {
                         panic!("Mocked query not supported for contract {}", contract_addr);
